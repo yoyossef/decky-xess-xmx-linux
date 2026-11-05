@@ -81,9 +81,26 @@ const box = (name: string) =>
 export const PanelSection = box("PanelSection");
 export const PanelSectionRow = box("PanelSectionRow");
 export const ButtonItem = box("ButtonItem");
-export const ToggleField = box("ToggleField");
+const ToggleBox = box("ToggleField");
+export function ToggleField(props: any) {
+  return <ToggleBox {...props}><input type="checkbox" aria-label={labelText(props.label)}
+    checked={Boolean(props.checked)} disabled={props.disabled} onChange={e => props.onChange?.(e.target.checked)} /></ToggleBox>;
+}
 export const SliderField = box("SliderField");
-export const TextField = box("TextField");
+/** A real controlled input: TextField forwards value/onChange to Steam's input. */
+const TextBox = box("TextField");
+export function TextField(props: any) {
+  return (
+    <TextBox {...props}>
+      <input
+        aria-label={labelText(props.label)}
+        value={props.value ?? ""}
+        disabled={props.disabled}
+        onChange={props.onChange}
+      />
+    </TextBox>
+  );
+}
 /**
  * Steam's DropdownItem, including the part `ValueDropdown` exists to work
  * around: it builds the label for the selected option once and then *keeps* it.
@@ -104,7 +121,15 @@ export function DropdownItem(props: any) {
     const match = (props.rgOptions ?? []).find((o: any) => o.data === props.selectedOption);
     displayed.current = match ? String(match.label) : "";
   }
-  return <DropdownBox {...props} data-shown={displayed.current} />;
+  return <DropdownBox {...props} data-shown={displayed.current}>
+    <select aria-label={labelText(props.label)} disabled={props.disabled} value={String(props.selectedOption ?? "")}
+      onChange={e => {
+        const option = props.rgOptions?.find((o: any) => String(o.data) === e.target.value);
+        if (!props.disabled && option) props.onChange?.(option);
+      }}>
+      {(props.rgOptions ?? []).map((o: any, i: number) => <option key={i} value={String(o.data)}>{String(o.label)}</option>)}
+    </select>
+  </DropdownBox>;
 }
 
 export const Field = box("Field");

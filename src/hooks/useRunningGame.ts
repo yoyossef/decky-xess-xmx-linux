@@ -94,44 +94,76 @@ export function restartGame(game: RunningGame) {
   }
 }
 
-/**
- * What Steam currently passes this game, or null when it will not say.
- *
- * `GetAppLaunchOptions` is undocumented and **absent from some client builds
- * entirely** — which is not a rare edge to shrug at. On a Deck where it is
- * missing, every launch-options question the plugin asks answers itself with
- * "cannot tell", and every action it would take on the answer turns into
- * nothing at all: the install records nothing to put back, and removing
- * OptiScaler leaves its own override behind because it cannot see it. So the
- * client is asked two ways before giving up, and `launchOptions.ts` asks the
- * backend — which reads Steam's own config file — when both come back empty.
- */
+/** Exact active-client custom launch options, or null when unavailable. */
 export async function readLaunchOptions(appid: number): Promise<string | null> {
-  // Neither of these is part of the Apps interface @decky/ui declares; both are
-  // read through a cast, the same way the library-menu patch reaches Steam's
-  // own internals.
+  let apps: {
+    GetAppLaunchOptions?: (id: number) => Promise<unknown>;
+    RegisterForAppDetails?: (
+      id: number, callback: (details: { unAppID?: unknown; strLaunchOptions?: unknown }) => void
+    ) => Unregisterable;
+  } | undefined;
   try {
-    const apps = SteamClient?.Apps as unknown as
-      | { GetAppLaunchOptions?: (id: number) => Promise<string> }
-      | undefined;
+    apps = SteamClient?.Apps as unknown as typeof apps;
     if (apps?.GetAppLaunchOptions) {
       const value = await apps.GetAppLaunchOptions(appid);
       if (typeof value === "string") return value;
     }
   } catch {
-    /* fall through to the app details store */
+    /* fall through to app details */
+  }
+  if (apps?.RegisterForAppDetails) {
+    // Subscribe for every read, including post-write verification: the store can
+    // be cold or stale. A failed subscription must not fall back to that cache.
+    return new Promise((resolve) => {
+      let registration: Unregisterable | undefined;
+      let settled = false;
+      const cleanup = () => {
+        const current = registration;
+        registration = undefined;
+        try {
+          current?.unregister();
+        } catch {
+          /* A client cleanup error must not strand the read or cause a retry. */
+        }
+      };
+      const finish = (value: string | null) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        cleanup();
+        resolve(value);
+      };
+      const timeout = window.setTimeout(() => finish(null), 2000);
+      try {
+        registration = apps.RegisterForAppDetails!(appid, (details) => {
+          if (settled) return;
+          try {
+            if (typeof details?.unAppID !== "number" || details.unAppID !== appid
+              || typeof details.strLaunchOptions !== "string") return;
+            finish(details.strLaunchOptions);
+          } catch {
+            finish(null);
+          }
+        });
+        // A synchronous callback runs before the registration handle is returned.
+        if (settled) cleanup();
+      } catch {
+        finish(null);
+      }
+    });
   }
   try {
     // The store the Steam library's own Properties dialog reads its launch
     // options box out of, which is present on builds that have no getter.
     const details = (
       globalThis as unknown as {
-        appDetailsStore?: { GetAppDetails?: (id: number) => { strLaunchOptions?: string } | null };
+        appDetailsStore?: { GetAppDetails?: (id: number) => { unAppID?: unknown; strLaunchOptions?: unknown } | null };
       }
     ).appDetailsStore?.GetAppDetails?.(appid);
-    if (details && typeof details.strLaunchOptions === "string") return details.strLaunchOptions;
+    if (details?.unAppID === appid && typeof details.unAppID === "number"
+      && typeof details.strLaunchOptions === "string") return details.strLaunchOptions;
   } catch {
-    /* the store is not there either; the backend is asked next */
+    /* The active client cannot report options; callers must handle null. */
   }
   return null;
 }

@@ -24,6 +24,8 @@ import { InstallPanel } from "./InstallPanel";
 import { LiveStats } from "./LiveStats";
 import { MonitorTab } from "./MonitorTab";
 import { SetupChecklist } from "./SetupChecklist";
+import { XmxPanel } from "./XmxPanel";
+import { GameFsrBridge } from "./FsrBridgePanel";
 
 const ADVANCED_KEY = "decky-optiscaler:advanced";
 
@@ -300,6 +302,7 @@ export function GameDetail({
       title: "Setup",
       content: (
         <TabBody>
+          <XmxPanel key={`${gamePath}:${appid ?? ""}`} appid={appid} running={isThisGameRunning} />
           {setupView === "checklist" ? (
             <SetupChecklist
               detail={detail}
@@ -359,6 +362,18 @@ export function GameDetail({
               />
             </>
           )}
+        </TabBody>
+      ),
+    },
+    {
+      // Always visible per the M2 UI decision: the state explains itself in
+      // place (package missing / hooks to install / game not bridged yet)
+      // instead of the tab hiding and the user hunting for it.
+      id: "bridge",
+      title: "FSR Bridge",
+      content: (
+        <TabBody>
+          <GameFsrBridge appid={appid} running={isThisGameRunning} />
         </TabBody>
       ),
     },
