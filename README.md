@@ -81,6 +81,35 @@ Grab `Decky-OptiScaler-v*.zip` from the
 Every release bundles OptiScaler itself, so there is nothing else to download.
 See the [changelog](CHANGELOG.md) for what changed.
 
+## Experimental native XeSS XMX support (this fork)
+
+The game's **Setup → XeSS XMX — native support** panel is independent of the
+OptiScaler installer. Select an existing extracted `xess-xmx-linux` package,
+preview the exact file/launch-option changes, then explicitly confirm them.
+This prefix feature does not download the package, install OptiScaler, or alter
+system Mesa/Proton files. Its per-game profile exposes the package's validated
+Mesa variants, alternate Intel extension discovery and optional diagnostic logs.
+A separately previewed **XeSS library DLL** panel can cache a pinned official
+Intel SDK, update one selected x86-64 DX12 `libxess.dll`, or restore its original.
+The SDK tag and embedded library version are shown separately. Prefix disable
+and DLL restore are independent; neither silently performs the other operation.
+
+- The initial GPU allowlist is Intel PCI `0xb080` on the OXP3. Other devices are
+  unverified, not assumed supported merely because they are Intel.
+- Existing script-managed XeSS installs are detected and blocked, not migrated.
+- Disable restores plugin-owned files and the original launch options; conflicts
+  stop restoration rather than overwrite later edits.
+- Interrupted operations retain a recovery journal. Follow the panel's explicit
+  resume/abort instructions; do not launch the game while recovery is pending.
+- **Disable XeSS XMX before removing the plugin or deleting its settings.** Its
+  per-game launch wrapper and recovery state live in the plugin settings directory.
+- Package validation is static. Flatpak path visibility, actual driver loading,
+  game compatibility, and XMX rendering still require on-device validation.
+
+FSR4/B Boost and DLSS-input translation are not part of this feature. Existing
+OptiScaler features remain separate. Technical details and the RPC/recovery
+contract are in [the XeSS XMX notes](docs/xess-xmx.md).
+
 ## Live in-game control
 
 OptiScaler reads its INI once, at startup — no file watcher, no IPC — and its overlay gets away
