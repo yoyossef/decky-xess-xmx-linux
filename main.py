@@ -72,6 +72,79 @@ class Plugin:
     async def find_running_game(self, appid: str, shortcut: dict = None) -> dict:
         return await self.service.find_running_game(appid, shortcut)
 
+    async def _xmx_rpc(self, method, *args):
+        try:
+            if self.service is None:
+                raise RuntimeError("XeSS XMX service is not initialized")
+            return await getattr(self.service, method)(*args)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    async def get_xmx_status(self, appid: str, package_dir: str = "") -> dict:
+        return await self._xmx_rpc("get_xmx_status", appid, package_dir)
+
+    async def plan_xmx(self, appid: str, package_dir: str, launch_options: str,
+                       action: str = "enable", profile: dict | None = None) -> dict:
+        return await self._xmx_rpc("plan_xmx", appid, package_dir, launch_options, action, profile)
+
+    async def get_xmx_logs(self, appid: str) -> dict:
+        return await self._xmx_rpc("get_xmx_logs", appid)
+
+    async def prepare_xess_sdk(self) -> dict:
+        return await self._xmx_rpc("prepare_xess_sdk")
+
+    async def get_xmx_package_status(self) -> dict:
+        return await self._xmx_rpc("get_xmx_package_status")
+
+    async def prepare_xmx_package(self) -> dict:
+        return await self._xmx_rpc("prepare_xmx_package")
+
+    async def get_fsr_bridge_state(self) -> dict:
+        return await self._xmx_rpc("get_fsr_bridge_state")
+
+    async def install_fsr_bridge(self) -> dict:
+        return await self._xmx_rpc("install_fsr_bridge")
+
+    async def uninstall_fsr_bridge(self, confirm: str) -> dict:
+        return await self._xmx_rpc("uninstall_fsr_bridge", confirm)
+
+
+    async def get_xess_dll_status(self, appid: str) -> dict:
+        return await self._xmx_rpc("get_xess_dll_status", appid)
+
+    async def plan_xess_dll(self, appid: str, target_path: str, launch_options: str,
+                            action: str = "enable", adopt_trial: bool = False) -> dict:
+        return await self._xmx_rpc("plan_xess_dll", appid, target_path, launch_options, action, adopt_trial)
+
+    async def apply_xess_dll(self, appid: str, plan_id: str) -> dict:
+        return await self._xmx_rpc("apply_xess_dll", appid, plan_id)
+
+    async def finish_xess_dll(self, appid: str, plan_id: str, launch_options: str) -> dict:
+        return await self._xmx_rpc("finish_xess_dll", appid, plan_id, launch_options)
+
+    async def recover_xess_dll(self, appid: str, plan_id: str, launch_options: str,
+                               action: str = "abort") -> dict:
+        return await self._xmx_rpc("recover_xess_dll", appid, plan_id, launch_options, action)
+
+    async def apply_xmx(self, appid: str, plan_id: str) -> dict:
+        return await self._xmx_rpc("apply_xmx", appid, plan_id)
+
+    async def finish_xmx(self, appid: str, plan_id: str, launch_options: str) -> dict:
+        return await self._xmx_rpc("finish_xmx", appid, plan_id, launch_options)
+
+    async def recover_xmx(self, appid: str, plan_id: str, launch_options: str,
+                          action: str = "abort") -> dict:
+        return await self._xmx_rpc("recover_xmx", appid, plan_id, launch_options, action)
+
+    async def nuke_plan_xmx(self, appid: str, package_dir: str = "") -> dict:
+        return await self._xmx_rpc("nuke_plan_xmx", appid, package_dir)
+
+    async def nuke_apply_xmx(self, appid: str, plan_id: str) -> dict:
+        return await self._xmx_rpc("nuke_apply_xmx", appid, plan_id)
+
+    async def nuke_finish_xmx(self, appid: str, plan_id: str, launch_options: str) -> dict:
+        return await self._xmx_rpc("nuke_finish_xmx", appid, plan_id, launch_options)
+
     async def get_fsr4_info(self, target_dir: str) -> dict:
         return await self.service.get_fsr4_info(target_dir)
 

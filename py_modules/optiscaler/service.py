@@ -5,7 +5,7 @@ import os
 import time
 from pathlib import Path
 
-from . import autoplan, fsr4build, installer, live, monitor, reframework, steam
+from . import autoplan, fsr4build, installer, live, monitor, reframework, steam, xmx
 from .constants import (
     DEFAULT_PROXY,
     INI_NAME,
@@ -32,6 +32,7 @@ class OptiScalerService:
         self.log = logger
 
         self.settings = Settings(Path(settings_dir) / "settings.json")
+        self.xmx = xmx.Manager(self.home, settings_dir)
         self.payload = Payload(
             self.plugin_dir / "bin" / PAYLOAD_ARCHIVE, self.runtime_dir / "payload"
         )
@@ -432,6 +433,151 @@ class OptiScalerService:
         """Pin a compatibility-list entry to a game, overriding name matching."""
         await self._run(self.settings.set_wiki_entry, game_path, entry_name)
         return {"ok": True}
+
+    # -- native-game XeSS XMX (independent of OptiScaler) -----------------
+    async def _xmx_call(self, method, *args, mutation=False):
+        try:
+            work = method if callable(method) else getattr(self.xmx, method)
+            if mutation:
+                async with self._mutation_lock:
+                    worker = asyncio.create_task(self._run(work, *args))
+                    try:
+                        return await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        # Cancelling an RPC cannot stop its filesystem thread.
+                        # Keep serialization until it really exits, even if the
+                        # caller is cancelled repeatedly while we drain it.
+                        while not worker.done():
+                            try:
+                                await asyncio.shield(worker)
+                            except asyncio.CancelledError:
+                                continue
+                            except Exception:
+                                break
+                        if not worker.cancelled():
+                            worker.exception()  # Retrieve a failed detached result.
+                        raise
+            return await self._run(work, *args)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    async def get_xmx_status(self, appid, package_dir=""):
+        return await self._xmx_call("get_xmx_status", appid, package_dir)
+
+    async def plan_xmx(self, appid, package_dir, launch_options, action="enable", profile=None):
+        return await self._xmx_call("plan_xmx", appid, package_dir, launch_options, action, profile,
+                                    mutation=True)
+
+    async def get_xmx_logs(self, appid):
+        return await self._xmx_call("get_xmx_logs", appid)
+
+    async def prepare_xess_sdk(self):
+        from . import xess_sdk
+        def prepare():
+            with self.xmx._lock():
+                return xess_sdk.prepare_sdk(self.xmx)
+        return await self._xmx_call(prepare, mutation=True)
+
+    async def get_xmx_package_status(self):
+        """Local-only prepared-package status; never touches the network."""
+        from . import xmx_package
+        return await self._xmx_call(xmx_package.get_status, self.xmx)
+
+    async def get_fsr_bridge_state(self):
+        """FSR->XeSS bridge state: package, hooks, parked session file, units."""
+        from . import xmx_bridge
+        return await self._xmx_call(xmx_bridge.state, self.xmx)
+
+    async def install_fsr_bridge(self):
+        """Explicit transaction: upstream install.sh (as the desktop user),
+        then the session-wide driver file is parked so only bridged games
+        ever load the patched driver."""
+        from . import xmx_bridge
+        def work():
+            with self.xmx._lock():
+                return xmx_bridge.install(self.xmx)
+        return await self._xmx_call(work, mutation=True)
+
+    async def uninstall_fsr_bridge(self, confirm):
+        """Upstream uninstall.sh + removal of the bridge's own parked traces.
+        Refuses while any game is still bridged; needs the exact token."""
+        from . import xmx_bridge
+        def work():
+            with self.xmx._lock():
+                return xmx_bridge.uninstall(self.xmx, confirm)
+        return await self._xmx_call(work, mutation=True)
+
+    async def prepare_xmx_package(self):
+        """Prepare the latest official package in a fresh versioned directory.
+
+        Never replaces a live package or touches any game's profile. On caller
+        cancellation the worker's cancel Event is signalled immediately, then
+        the mutation lock is held until the worker thread really exits, so a
+        second preparation never races a dying download and repeated cancels
+        cannot drop the caller mid-drain.
+        """
+        import threading
+        from . import xmx_package
+        cancel = threading.Event()
+        def prepare():
+            try:
+                return xmx_package.prepare(self.xmx, cancel=cancel)
+            except Exception as exc:
+                return {"ok": False, "state": "error", "package": None,
+                        "latest": None, "error": str(exc)[:2048]}
+        async with self._mutation_lock:
+            worker = asyncio.create_task(self._run(prepare))
+            try:
+                return await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                cancel.set()  # Stop the download loop first...
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue  # ...then drain until it truly exits.
+                    except Exception:
+                        break
+                if not worker.cancelled():
+                    worker.exception()  # Retrieve a failed detached result.
+                raise
+
+    async def get_xess_dll_status(self, appid):
+        return await self._xmx_call("get_xess_dll_status", appid)
+
+    async def plan_xess_dll(self, appid, target_path, launch_options, action="enable", adopt_trial=False):
+        return await self._xmx_call("plan_xess_dll", appid, target_path, launch_options, action,
+                                    adopt_trial, mutation=True)
+
+    async def apply_xess_dll(self, appid, plan_id):
+        return await self._xmx_call("apply_xess_dll", appid, plan_id, mutation=True)
+
+    async def finish_xess_dll(self, appid, plan_id, launch_options):
+        return await self._xmx_call("finish_xess_dll", appid, plan_id, launch_options, mutation=True)
+
+    async def recover_xess_dll(self, appid, plan_id, launch_options, action="abort"):
+        return await self._xmx_call("recover_xess_dll", appid, plan_id, launch_options, action,
+                                    mutation=True)
+
+    async def apply_xmx(self, appid, plan_id):
+        return await self._xmx_call("apply_xmx", appid, plan_id, mutation=True)
+
+    async def finish_xmx(self, appid, plan_id, launch_options):
+        return await self._xmx_call("finish_xmx", appid, plan_id, launch_options, mutation=True)
+
+    async def recover_xmx(self, appid, plan_id, launch_options, action="abort"):
+        return await self._xmx_call("recover_xmx", appid, plan_id, launch_options, action,
+                                    mutation=True)
+
+    async def nuke_plan_xmx(self, appid, package_dir=""):
+        return await self._xmx_call("nuke_plan_xmx", appid, package_dir, mutation=True)
+
+    async def nuke_apply_xmx(self, appid, plan_id):
+        return await self._xmx_call("nuke_apply_xmx", appid, plan_id, mutation=True)
+
+    async def nuke_finish_xmx(self, appid, plan_id, launch_options):
+        return await self._xmx_call("nuke_finish_xmx", appid, plan_id, launch_options,
+                                    mutation=True)
 
     # -- FSR4 support files ----------------------------------------------
     def fsr4_build_cache(self):
