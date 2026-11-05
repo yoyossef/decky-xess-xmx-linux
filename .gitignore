@@ -59,4 +59,8 @@ cli/decky
 out/
 testharness/.bundle.mjs
 
+# Local verification artifacts (contain device paths)
+testharness/.verification-*.json
+testharness/.xmx-parent-check.mjs
+
 CLAUDE.md
