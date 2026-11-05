@@ -159,7 +159,7 @@ export interface FsrBridgeState {
   package: { tag: string; path: string } | null;
   package_error?: string;
   session_conf: "active" | "parked" | "absent";
-  hooks: { protons: string[]; hooked: string[]; plain: string[]; installed: boolean };
+  hooks: { protons: string[]; hooked: string[]; plain: string[]; stale?: string[]; installed: boolean };
   driver_status: { state: string; line: string | null };
   apps: string[];
   bridges: string[];

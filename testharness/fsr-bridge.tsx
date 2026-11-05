@@ -241,6 +241,20 @@ await test("settings section reports scope and never toggles games", async () =>
   } finally { await p.cleanup(); }
 });
 
+await test("hooks pointing at a moved package report stale and re-offer install", async () => {
+  fixtures.get_fsr_bridge_state = {
+    ...bare,
+    session_conf: "active",
+    hooks: { protons: ["Proton-GE"], hooked: [], plain: [], stale: ["Proton-GE"], installed: false },
+  };
+  const p = await render(<BridgeGlobalSection />);
+  try {
+    assert.match(p.host.textContent ?? "", /moved — reinstall/, "stale hooks are named, not called installed");
+    assert.equal(button(p.host, "Install Proton hooks (advanced)").getAttribute("data-disabled"), null,
+      "the reinstall button is reachable again after a package move");
+  } finally { await p.cleanup(); }
+});
+
 await test("uninstall needs Details, an arming press and the exact token", async () => {
   const uninstalls: unknown[][] = [];
   let state: typeof bridged = bridged;

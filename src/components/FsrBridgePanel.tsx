@@ -231,7 +231,9 @@ export function BridgeGlobalSection() {
         Package: {state.package ? state.package.tag : "none — prepare the XMX package first"}<br />
         Proton hooks: {hooks?.installed
           ? `installed (${hooks.hooked.length}/${hooks.protons.length}) — ${bridgedCount} game${bridgedCount === 1 ? "" : "s"} bridged`
-          : hooks?.protons?.length ? "not installed" : "no Proton found"}<br />
+          : hooks?.stale?.length
+            ? "hooked but the package they load was moved — reinstall below"
+            : hooks?.protons?.length ? "not installed" : "no Proton found"}<br />
         Driver scope: {state.session_conf === "parked"
           ? "per game only (session file parked)"
           : state.session_conf === "active"

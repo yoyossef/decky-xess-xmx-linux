@@ -19,6 +19,7 @@ this module only removes its own parked file and snapshot. Every step lands in
 ``bridge-journal.jsonl`` as evidence.
 """
 import json
+import re
 import logging
 import os
 import pwd
@@ -34,6 +35,9 @@ BRIDGE_ENV = 'bridge.env'
 JOURNAL = 'bridge-journal.jsonl'
 DRIVER_STATUS = '.cache/xess-xmx/driver-status'
 HOOK_MARK = 'xess-xmx proton hook'
+# The hook file install.sh writes exec()s an absolute proton-hook.py path; a
+# missing script means the install it came from is gone (moved, nuked, replaced).
+HOOK_SCRIPT_RE = re.compile(r'^\s*_h\s*=\s*[\'"]([^\'"]+)[\'"]', re.M)
 UNITS = ('xess-xmx-check.service', 'xess-xmx-shim.path')
 #: the panel must echo this exact token to unlock the destructive uninstall
 CONFIRM = 'uninstall-hooks'
@@ -157,15 +161,24 @@ def _protons(manager):
 
 def _hooks(manager):
     protons = _protons(manager)
-    hooked, plain = [], []
+    hooked, plain, stale = [], [], []
     for folder in protons:
         try:
             text = (folder/'user_settings.py').read_text(encoding='utf-8', errors='replace')
         except OSError:
             text = ''
-        (hooked if HOOK_MARK in text else plain).append(folder.name)
+        if HOOK_MARK not in text:
+            plain.append(folder.name)
+            continue
+        # The marker survives a package move or removal while the hook script
+        # it exec()s does not: verify the embedded path before trusting it.
+        match = HOOK_SCRIPT_RE.search(text)
+        if match and not Path(match.group(1)).is_file():
+            stale.append(folder.name)
+        else:
+            hooked.append(folder.name)
     return {'protons': [p.name for p in protons], 'hooked': hooked, 'plain': plain,
-            'installed': bool(hooked)}
+            'stale': stale, 'installed': bool(hooked)}
 
 
 def _driver_status(manager):
@@ -182,9 +195,14 @@ def _driver_status(manager):
 
 def _session_conf_state(manager):
     conf = manager.home/ENV_CONF
+    # A parked copy from an earlier bridge cycle is only meaningful while no
+    # live session file exists: re-running install.sh refreshes the live one
+    # and the stale parked sibling must never shadow it.
+    if conf.is_file():
+        return 'active'
     if Path(str(conf) + PARKED_SUFFIX).is_file():
         return 'parked'
-    return 'active' if conf.is_file() else 'absent'
+    return 'absent'
 
 
 def _parse_conf(text):

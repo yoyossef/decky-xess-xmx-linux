@@ -171,6 +171,52 @@ class BridgeTests(unittest.TestCase):
         self.assertFalse(state['hooks']['installed'])
         self.assertEqual(state['session_conf'], 'absent')
 
+    def test_active_conf_next_to_a_stale_parked_copy_is_active(self):
+        # Re-running install.sh refreshes the session file while the previous
+        # cycle's parked copy still sits beside it: the live file wins.
+        prepared_package(self.home, self.manager.root)
+        self.assertTrue(xmx_bridge.install(self.manager, run=self.run)['ok'])
+        conf = self.home/xmx_bridge.ENV_CONF
+        conf.write_text('VK_DRIVER_FILES=/new/pkg/run/intel_icd.json\n', encoding='utf-8')
+        self.assertEqual(xmx_bridge._session_conf_state(self.manager), 'active')
+
+    def test_reinstall_succeeds_with_a_stale_parked_copy_present(self):
+        # A parked copy from an earlier bridge install must never make the
+        # post-install verification refuse to scope a freshly written file.
+        prepared_package(self.home, self.manager.root)
+        self.assertTrue(xmx_bridge.install(self.manager, run=self.run)['ok'])
+        # A second install over an already-parked state: install.sh writes a
+        # new session file, verification must accept it and re-park cleanly.
+        self.assertTrue(xmx_bridge.install(self.manager, run=self.run)['ok'])
+        self.assertEqual(xmx_bridge._session_conf_state(self.manager), 'parked')
+
+    def test_marker_pointing_to_a_moved_package_is_stale_not_installed(self):
+        # The hook file survives a package move/nuke; its embedded
+        # proton-hook.py path does not. Trusting the comment alone hides the
+        # reinstall button behind a dead hook.
+        folder = self.home/'.local/share/Steam/steamapps/common/Proton - Experimental'
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder/'proton').write_text('#!/bin/bash\n', encoding='utf-8')
+        (folder/'user_settings.py').write_text(
+            '# %s\n_h = "%s/tools/proton-hook.py"\n' % (xmx_bridge.HOOK_MARK, home_pkg_absent := '/home/gone/xess-xmx-linux-moved'),
+            encoding='utf-8')
+        state = xmx_bridge.state(self.manager, run=self.run)
+        self.assertFalse(state['hooks']['installed'], state['hooks'])
+        self.assertIn('Proton - Experimental', state['hooks']['stale'])
+
+    def test_marker_with_a_live_script_path_is_hooked(self):
+        package = prepared_package(self.home, self.manager.root)
+        (package/'tools/proton-hook.py').write_text('# hook\n', encoding='utf-8')
+        folder = self.home/'.local/share/Steam/steamapps/common/Proton - Experimental'
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder/'proton').write_text('#!/bin/bash\n', encoding='utf-8')
+        (folder/'user_settings.py').write_text(
+            '# %s\n_h = "%s/tools/proton-hook.py"\n' % (xmx_bridge.HOOK_MARK, package),
+            encoding='utf-8')
+        state = xmx_bridge.state(self.manager, run=self.run)
+        self.assertTrue(state['hooks']['installed'], state['hooks'])
+        self.assertEqual(state['hooks']['stale'], [])
+
     # ---- per-game bridges and uninstall gate ---------------------------------
     def bridge_config(self, appid='1817230', line='export FSR=xess\n'):
         app = self.manager.root/'apps'/self.manager._appid(appid)
