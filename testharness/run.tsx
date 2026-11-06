@@ -683,6 +683,13 @@ async function render(name: string, element: React.ReactElement) {
   });
   await settle();
   const freshText = gdFresh.host.textContent!;
+  // The header badge is the single glanceable truth about this game. An XMX
+  // setup must light it even when OptiScaler was never installed, or the page
+  // reads "not set up" a few pixels from "Enabled (configured)".
+  console.log(`  the header badge flips to XMX when XeSS XMX is set up: ${
+    freshText.includes("XMX set up") && !freshText.includes("not set up")}`);
+  console.log(`  the header carries the Mesa build and the live bridge: ${
+    freshText.includes("Mesa 26.1.2") && freshText.includes("FSR 4 Bridge")}`);
   console.log(`  a matched game says so before anything is written: ${
     freshText.includes("can be set up automatically")}`);
   console.log(`  three steps, named: ${

@@ -10,6 +10,7 @@ import {
 import { toaster } from "@decky/api";
 import { useCallback, useEffect, useState } from "react";
 import { applyAutoSettings, getGame } from "../api";
+import { getXmxSetupApps } from "../xmxApi";
 import { TABS } from "../config/tabs";
 import { useAutoPlan } from "../hooks/useAutoPlan";
 import { useConfig } from "../hooks/useConfig";
@@ -160,6 +161,28 @@ export function GameDetail({
 
   const installed = Boolean(detail?.install.installed);
   const targetDir = detail?.install.installed ? detail.install.path : null;
+  // The header badge must know about XeSS XMX too, not just about an
+  // OptiScaler folder; a game enabled here is emphatically set up even when
+  // OptiScaler was never installed. Same join rule as the games list:
+  // appids arrive as numbers on some Steam paths.
+  const [xmxSetup, setXmxSetup] = useState<{ bridge: boolean; mesa: string | null } | null>(null);
+  useEffect(() => {
+    if (appid === null || appid === undefined) { setXmxSetup(null); return; }
+    let alive = true;
+    void getXmxSetupApps()
+      .then((setup) => {
+        if (!alive || !("apps" in setup) || !Array.isArray(setup.apps)) return;
+        const hit = setup.apps.find((entry) =>
+          String(typeof entry === "string" ? entry : entry?.appid) === String(appid));
+        setXmxSetup(!hit ? null
+          : typeof hit === "string" ? { bridge: false, mesa: null }
+          : { bridge: Boolean(hit.bridge), mesa: hit.mesa ?? null });
+      })
+      // A failed lookup must never claim setup, and must never deny it with
+      // a stale "not set up" either: keep whatever the last truth was.
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [appid]);
   const isRunning =
     runningGame !== null && appid !== null && String(runningGame.appid) === appid;
   // OptiScaler's overlay writes the ini when the user hits Save in-game, so
@@ -476,11 +499,16 @@ export function GameDetail({
         onBack={onBack}
         badges={
           <>
-            {installed ? (
-              <Pill color="#2f6b3f">{detail.install.filename}</Pill>
-            ) : (
+            {installed ? <Pill color="#2f6b3f">{detail.install.filename}</Pill> : null}
+            {xmxSetup ? (
+              <>
+                <Pill color="#2b6cb0" text="#fff">XMX set up</Pill>
+                {xmxSetup.mesa ? <Pill color="#c53030" text="#fff">Mesa {xmxSetup.mesa}</Pill> : null}
+                {xmxSetup.bridge ? <Pill color="#c53030" text="#fff">FSR 4 Bridge</Pill> : null}
+              </>
+            ) : !installed ? (
               <Pill>not set up</Pill>
-            )}
+            ) : null}
             {detail.install.fsr4?.ffx?.version ? (
               <Pill>FFX {detail.install.fsr4.ffx.version}</Pill>
             ) : null}
