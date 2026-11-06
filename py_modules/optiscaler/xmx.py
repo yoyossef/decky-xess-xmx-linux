@@ -1668,6 +1668,8 @@ class Manager:
         # ownership record, i.e. games this plugin has actually configured.
         # An unreadable record still counts — something is installed there
         # and the game page (status/nuke) is where it gets explained.
+        # Each entry also carries the row badges: is the FSR bridge exported
+        # for this game, and which Mesa build the setup selects.
         found = []
         try:
             entries = list((self.root / "apps").iterdir())
@@ -1675,12 +1677,45 @@ class Manager:
             return {"apps": []}
         for entry in entries:
             try:
-                if entry.is_dir() and (entry / "installed.json").is_file() \
-                        and re.fullmatch(r"[1-9][0-9]{0,9}", entry.name):
-                    found.append(entry.name)
+                if not entry.is_dir() or not (entry / "installed.json").is_file():
+                    continue
+                if not re.fullmatch(r"[1-9][0-9]{0,9}", entry.name):
+                    continue
+                bridge, mesa = False, None
+                try:
+                    text = (entry / "xess.conf").read_text(encoding="utf-8")
+                except OSError:
+                    text = ""
+                bridge = "export FSR=" in text or "export FSR_FG=" in text
+                selector = re.search(r"^export MESA=(\S+)$", text, re.M)
+                if selector:
+                    mesa = self._mesa_version(entry, selector.group(1))
+                found.append({"appid": entry.name, "bridge": bridge, "mesa": mesa})
             except OSError:
                 continue
-        return {"apps": sorted(found)}
+        return {"apps": sorted(found, key=lambda app: app["appid"])}
+
+    def _mesa_version(self, app, selector):
+        # Resolve the selector (say 26.1) to the exact build the package
+        # carries (mesa-26.1.2) so the badge tells the truth about what the
+        # game actually loads. A vanished package or an ambiguous match falls
+        # back to the selector; 26.1 must never resolve onto mesa-26.10.x.
+        try:
+            package = self._load(app / "installed.json").get("package_dir")
+        except (OSError, ValueError):
+            return selector
+        if not isinstance(package, str) or not package:
+            return selector
+        try:
+            names = [path.name for path in (Path(package) / "lib").iterdir()]
+        except OSError:
+            return selector
+        prefix = "mesa-" + selector
+        if prefix in names:
+            return selector
+        matches = sorted(name[len("mesa-"):] for name in names
+                         if name.startswith(prefix) and name[len(prefix):][:1] in (".", "-"))
+        return matches[0] if matches else selector
 
     @api
     def get_xmx_status(self, appid, package_dir=''):

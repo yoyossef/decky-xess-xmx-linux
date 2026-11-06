@@ -51,8 +51,14 @@ export function isXmxStatus(value: unknown): value is XmxStatus {
 }
 
 export const getXmxStatus = callable<[appid: string, packageDir?: string], XmxStatus | XmxResult>("get_xmx_status");
+export interface XmxSetupApp {
+  appid: string;
+  bridge: boolean;
+  mesa: string | null;
+}
 export interface XmxSetupApps {
-  apps: string[];
+  // Older backends answered bare appid strings; the list renders both shapes.
+  apps: (XmxSetupApp | string)[];
 }
 export const getXmxSetupApps = callable<[], XmxSetupApps | XmxResult>("get_xmx_setup_apps");
 export const planXmx = callable<[appid: string, packageDir: string, launchOptions: string, action?: XmxAction, profile?: XmxProfile], XmxPlan>("plan_xmx");

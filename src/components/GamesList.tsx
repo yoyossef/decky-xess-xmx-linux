@@ -24,7 +24,7 @@ const PAGE_SIZE = 20;
  */
 export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) {
   const [games, setGames] = useState<Game[] | null>(null);
-  const [xmxApps, setXmxApps] = useState<Set<string>>(new Set());
+  const [xmxApps, setXmxApps] = useState<Map<string, { bridge: boolean; mesa: string | null }>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [shown, setShown] = useState(PAGE_SIZE);
   const [filter, setFilter] = useState("all");
@@ -38,7 +38,18 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
       // "Set up" means configured here (XeSS XMX), not whatever OptiScaler
       // somebody dropped in by hand; a failed lookup must never empty the list.
       const [found, setup] = await Promise.all([listAllGames(), getXmxSetupApps().catch(() => ({ apps: [] }))]);
-      setXmxApps(new Set("apps" in setup && Array.isArray(setup.apps) ? setup.apps : []));
+      // Steam hands appids around as numbers in some paths and strings in
+      // others; the join must survive both, or a set-up game vanishes from
+      // its own list.
+      const details = new Map<string, { bridge: boolean; mesa: string | null }>();
+      if ("apps" in setup && Array.isArray(setup.apps)) {
+        for (const entry of setup.apps) {
+          if (typeof entry === "string") details.set(entry, { bridge: false, mesa: null });
+          else if (entry && entry.appid != null)
+            details.set(String(entry.appid), { bridge: Boolean(entry.bridge), mesa: entry.mesa ?? null });
+        }
+      }
+      setXmxApps(details);
       // Never trust the shape: a backend that failed mid-scan must not take the
       // whole page down with it.
       const list = Array.isArray(found) ? found : [];
@@ -87,7 +98,8 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
 
   if (games === null) return <Centered>Scanning your libraries…</Centered>;
 
-  const isSetup = (game: Game) => game.appid !== null && xmxApps.has(game.appid);
+  // Steam hands some callers numeric appids; the map is keyed by strings.
+  const isSetup = (game: Game) => game.appid !== null && xmxApps.has(String(game.appid));
 
   const filtered = filterGames(games, filter, played, isSetup);
   const visible = filtered.slice(0, shown);
@@ -134,7 +146,13 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
                     ? `XeSS XMX · ${game.filename}`
                     : describePlayed(played.get(game.path)) ?? game.library ?? undefined
                 }
-                right={isSetup(game) ? <Pill color="#2f6b3f">XMX</Pill> : null}
+                right={isSetup(game) ? <>
+                  <Pill color="#2b6cb0" text="#fff">XMX</Pill>
+                  {xmxApps.get(String(game.appid))?.mesa
+                    ? <Pill color="#c53030" text="#fff">Mesa {xmxApps.get(String(game.appid))?.mesa}</Pill> : null}
+                  {xmxApps.get(String(game.appid))?.bridge
+                    ? <Pill color="#c53030" text="#fff">FSR 4 Bridge</Pill> : null}
+                </> : null}
                 onClick={() => onOpenGame(game)}
               />
             );

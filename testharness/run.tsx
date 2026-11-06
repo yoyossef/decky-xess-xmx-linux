@@ -66,7 +66,7 @@ Object.assign(fixtures, {
     default_proxy: "dxgi.dll",
   },
   prepare_payload: { ok: true },
-  get_xmx_setup_apps: { apps: ["1091500"] },
+  get_xmx_setup_apps: { apps: [{ appid: "1091500", bridge: true, mesa: "26.1.2" }] },
   list_libraries: [
     { path: "/home/deck/.local/share/Steam", name: "Internal Storage", source: "steam", game_count: 2, available: true },
     { path: "/run/media/SD", name: "SD Card (SD)", source: "custom", game_count: 1, available: true },
@@ -77,7 +77,7 @@ Object.assign(fixtures, {
   ],
   // The flat list the main page leads with: enough entries to page through.
   list_all_games: [
-    { appid: "1091500", name: "Cyberpunk 2077", path: "/games/Cyberpunk 2077", source: "steam", library: "Internal Storage", size_on_disk: 1, installed: true, filename: "dxgi.dll", install_path: "/games/Cyberpunk 2077/bin/x64" },
+    { appid: 1091500, name: "Cyberpunk 2077", path: "/games/Cyberpunk 2077", source: "steam", library: "Internal Storage", size_on_disk: 1, installed: true, filename: "dxgi.dll", install_path: "/games/Cyberpunk 2077/bin/x64" },
     ...Array.from({ length: 27 }, (_, i) => ({
       appid: String(3000000 + i), name: `Test Game ${String(i + 1).padStart(2, "0")}`,
       path: `/games/test-${i}`, source: "steam", library: "Internal Storage",
@@ -345,6 +345,10 @@ async function render(name: string, element: React.ReactElement) {
   console.log(`  filtering to the ones set up drops the rest: ${
     setUpOnly.includes("Cyberpunk 2077") && !setUpOnly.includes("Test Game 01")}`);
   console.log(`  the set up rows carry the XMX pill: ${setUpOnly.includes("XMX")}`);
+  // Steam's Game interface carries numeric appids; the Set up join must not drop them.
+  console.log(`  a numeric appid still lands in the Set up list: ${setUpOnly.includes("Cyberpunk 2077")}`);
+  console.log(`  the row badges the Mesa build: ${setUpOnly.includes("Mesa 26.1.2")}`);
+  console.log(`  the row badges the live FSR 4 Bridge: ${setUpOnly.includes("FSR 4 Bridge")}`);
   await act(async () => {
     (findAll(qp.host, '[data-filter="all"]')[0] as HTMLElement).click();
   });

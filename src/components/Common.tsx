@@ -58,7 +58,7 @@ export function KeyValue({ label, value }: { label: ReactNode; value: ReactNode 
   );
 }
 
-export function Pill({ children, color }: { children: ReactNode; color?: string }) {
+export function Pill({ children, color, text }: { children: ReactNode; color?: string; text?: string }) {
   return (
     <span
       style={{
@@ -68,6 +68,7 @@ export function Pill({ children, color }: { children: ReactNode; color?: string 
         fontSize: "11px",
         fontWeight: 600,
         background: color ?? "rgba(255,255,255,0.12)",
+        color: text,
         marginRight: "5px",
         whiteSpace: "nowrap",
       }}

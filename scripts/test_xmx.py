@@ -389,13 +389,36 @@ finally:
         apps = self.manager.root/'apps'
         apps.mkdir(parents=True, exist_ok=True)
         (apps/'3357650').mkdir()
-        (apps/'3357650'/'installed.json').write_text('{}')
+        package = self.home/'xess-pkg'
+        (package/'lib'/'mesa-26.1.2').mkdir(parents=True)
+        (apps/'3357650'/'installed.json').write_text(
+            json.dumps({'package_dir': str(package)}))
+        (apps/'3357650'/'xess.conf').write_text(
+            "export VK_DRIVER_FILES='x'\nexport MESA=26.1\nexport FSR=xess\n")
         (apps/'3132990').mkdir()          # configured but the record is corrupt:
         (apps/'3132990'/'installed.json').write_text('{corrupt')  # still installed
+        (apps/'3132990'/'xess.conf').write_text("export FSR_FG=xess\n")
+        (apps/'292033').mkdir()           # a selector whose package vanished falls back
+        (apps/'292033'/'installed.json').write_text(json.dumps({'package_dir': '/gone'}))
+        (apps/'292033'/'xess.conf').write_text("export MESA=26.3\n")
         (apps/'292030').mkdir()           # a plan left over is not a setup
         (apps/'0bogus').mkdir()
         (apps/'0bogus'/'installed.json').write_text('{}')
-        self.assertEqual(self.manager.list_xmx_apps(), {'apps': ['3132990', '3357650']})
+        self.assertEqual(self.manager.list_xmx_apps(), {'apps': [
+            {'appid': '292033', 'bridge': False, 'mesa': '26.3'},
+            {'appid': '3132990', 'bridge': True, 'mesa': None},
+            {'appid': '3357650', 'bridge': True, 'mesa': '26.1.2'}]})
+
+    def test_list_xmx_apps_mesa_selector_cannot_match_a_longer_minor(self):
+        apps = self.manager.root/'apps'
+        apps.mkdir(parents=True, exist_ok=True)
+        package = self.home/'xess-pkg'
+        (package/'lib'/'mesa-26.10.1').mkdir(parents=True)  # must NOT answer selector 26.1
+        (apps/'42').mkdir()
+        (apps/'42'/'installed.json').write_text(json.dumps({'package_dir': str(package)}))
+        (apps/'42'/'xess.conf').write_text("export MESA=26.1\n")
+        self.assertEqual(self.manager.list_xmx_apps()['apps'],
+                         [{'appid': '42', 'bridge': False, 'mesa': '26.1'}])
 
     def test_list_xmx_apps_without_any_state_is_empty(self):
         self.assertEqual(self.manager.list_xmx_apps(), {'apps': []})
