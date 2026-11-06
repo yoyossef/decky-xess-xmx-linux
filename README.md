@@ -38,8 +38,6 @@ manager parked behind an explicit button for the games XeSS XMX doesn't serve.
   checks for newer upstream releases. Prefer it pre-downloaded? Point the plugin at your own
   extracted package folder instead — same checksums, same validation. Nothing is ever applied
   to a game until you preview and confirm that game's setup.
-- One of `7z`, `7zz`, `7za`, `7zr` or `bsdtar` for the bundled OptiScaler release (SteamOS has
-  both p7zip and bsdtar; it runs once, on first install).
 - Games on their **DX12 renderer** — XeSS/FSR is selected in each game's own graphics settings.
 
 ## Installing the plugin
