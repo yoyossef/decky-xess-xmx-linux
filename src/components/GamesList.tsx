@@ -28,6 +28,11 @@ function readXmxSetupApps() {
   return getXmxSetupApps()
     .then((setup) => {
       const details = new Map<string, { bridge: boolean; mesa: string | null }>();
+      // A backend error arrives as {ok:false,error}, not as an exception; a
+      // broken RPC hop must not read as "nothing is set up" the way it did in
+      // M5.4, so leave a trace in the console for the next one.
+      if (!("apps" in setup))
+        console.warn("xess-xmx: setup-apps lookup returned no apps list", setup);
       if ("apps" in setup && Array.isArray(setup.apps)) {
         for (const entry of setup.apps) {
           if (typeof entry === "string") details.set(entry, { bridge: false, mesa: null });

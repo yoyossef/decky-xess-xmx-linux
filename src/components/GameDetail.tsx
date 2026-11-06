@@ -171,7 +171,13 @@ export function GameDetail({
     let alive = true;
     const read = () => getXmxSetupApps()
       .then((setup) => {
-        if (!alive || !("apps" in setup) || !Array.isArray(setup.apps)) return;
+        if (!alive) return;
+        if (!("apps" in setup) || !Array.isArray(setup.apps)) {
+          // Same silent-failure trap as the games list: an RPC error is data,
+          // not an exception, and must not look like an empty setup.
+          console.warn("xess-xmx: setup-apps lookup returned no apps list", setup);
+          return;
+        }
         const hit = setup.apps.find((entry) =>
           String(typeof entry === "string" ? entry : entry?.appid) === String(appid));
         setXmxSetup(!hit ? null
