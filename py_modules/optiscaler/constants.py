@@ -1,4 +1,4 @@
-"""Shared constants for the Decky OptiScaler plugin."""
+"""Shared constants for the Decky XeSS XMX plugin."""
 
 OPTISCALER_VERSION = "0.9.4"
 PAYLOAD_ARCHIVE = "OptiScaler-0.9.4.7z"

@@ -134,6 +134,9 @@ export function GameDetail({
   // The Setup tab is a checklist; the two things it links to open in its place
   // rather than as tabs of their own, because neither is a place to live.
   const [setupView, setSetupView] = useState<"checklist" | "manual" | "logs">("checklist");
+  // This plugin's headline is XeSS XMX; the OptiScaler guided setup lives
+  // behind an explicit button so it never competes with it on arrival.
+  const [optiscalerOpen, setOptiscalerOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -303,7 +306,19 @@ export function GameDetail({
       content: (
         <TabBody>
           <XmxPanel key={`${gamePath}:${appid ?? ""}`} appid={appid} running={isThisGameRunning} />
-          {setupView === "checklist" ? (
+          {!optiscalerOpen ? (
+            <PanelSection title="OptiScaler">
+              <PanelSectionRow>
+                <ButtonItem
+                  layout="below"
+                  onClick={() => setOptiscalerOpen(true)}
+                >
+                  Open OptiScaler setup
+                </ButtonItem>
+              </PanelSectionRow>
+            </PanelSection>
+          ) : setupView === "checklist" ? (
+            <>
             <SetupChecklist
               detail={detail}
               appid={appid}
@@ -330,6 +345,8 @@ export function GameDetail({
                 await config.reload();
               }}
             />
+            <BackRow label="OptiScaler setup" onBack={() => setOptiscalerOpen(false)} position="bottom" />
+            </>
           ) : (
             <>
               <BackRow
@@ -381,7 +398,7 @@ export function GameDetail({
       ? [
           {
             id: "basic",
-            title: "Settings",
+            title: "OptiScaler",
             content: (
               <TabBody>
                 <LiveStats live={liveStatus} />

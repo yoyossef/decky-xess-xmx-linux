@@ -1655,6 +1655,26 @@ class Manager:
         return {'ok': True, 'logs': logs, 'runtime_verified': False}
 
     @api
+    def list_xmx_apps(self):
+        # The library list's "Set up" filter: app ids that carry an
+        # ownership record, i.e. games this plugin has actually configured.
+        # An unreadable record still counts — something is installed there
+        # and the game page (status/nuke) is where it gets explained.
+        found = []
+        try:
+            entries = list((self.root / "apps").iterdir())
+        except OSError:
+            return {"apps": []}
+        for entry in entries:
+            try:
+                if entry.is_dir() and (entry / "installed.json").is_file() \
+                        and re.fullmatch(r"[1-9][0-9]{0,9}", entry.name):
+                    found.append(entry.name)
+            except OSError:
+                continue
+        return {"apps": sorted(found)}
+
+    @api
     def get_xmx_status(self, appid, package_dir=''):
         app = self._app(appid)
         # The red-button escape hatch must stay reachable when the installed

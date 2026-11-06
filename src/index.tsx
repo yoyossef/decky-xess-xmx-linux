@@ -23,8 +23,8 @@ export default definePlugin(() => {
   const unpatchContextMenu = patchLibraryContextMenu();
 
   return {
-    name: "Decky OptiScaler",
-    titleView: <div className={staticClasses.Title}>Decky OptiScaler</div>,
+    name: "Decky XeSS XMX",
+    titleView: <div className={staticClasses.Title}>Decky XeSS XMX</div>,
     content: <Content />,
     icon: <FaLayerGroup />,
     onDismount() {

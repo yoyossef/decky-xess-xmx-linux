@@ -1,6 +1,7 @@
 import { ButtonItem, Focusable, PanelSection, PanelSectionRow } from "@decky/ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listAllGames } from "../api";
+import { getXmxSetupApps } from "../xmxApi";
 import { lastPlayed } from "../hooks/useRunningGame";
 import type { Game } from "../types";
 import { Centered, Notice, Pill, RowButton } from "./Common";
@@ -23,6 +24,7 @@ const PAGE_SIZE = 20;
  */
 export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) {
   const [games, setGames] = useState<Game[] | null>(null);
+  const [xmxApps, setXmxApps] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [shown, setShown] = useState(PAGE_SIZE);
   const [filter, setFilter] = useState("all");
@@ -33,7 +35,10 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const found = await listAllGames();
+      // "Set up" means configured here (XeSS XMX), not whatever OptiScaler
+      // somebody dropped in by hand; a failed lookup must never empty the list.
+      const [found, setup] = await Promise.all([listAllGames(), getXmxSetupApps().catch(() => ({ apps: [] }))]);
+      setXmxApps(new Set("apps" in setup && Array.isArray(setup.apps) ? setup.apps : []));
       // Never trust the shape: a backend that failed mid-scan must not take the
       // whole page down with it.
       const list = Array.isArray(found) ? found : [];
@@ -82,10 +87,12 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
 
   if (games === null) return <Centered>Scanning your libraries…</Centered>;
 
-  const filtered = filterGames(games, filter, played);
+  const isSetup = (game: Game) => game.appid !== null && xmxApps.has(game.appid);
+
+  const filtered = filterGames(games, filter, played, isSetup);
   const visible = filtered.slice(0, shown);
   const remaining = filtered.length - visible.length;
-  const setUpCount = games.filter((game) => game.installed).length;
+  const setUpCount = games.filter(isSetup).length;
   const anyPlayed = Array.from(played.values()).some((value) => value !== null);
   const tabs = [
     ...(anyPlayed ? [{ id: "recent", title: "Recent" }] : []),
@@ -112,7 +119,7 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
           <PanelSectionRow>
             <Notice tone="info" title={filter === "setup" ? "None set up yet" : "No games found"}>
               {filter === "setup"
-                ? "No game has OptiScaler installed yet. Pick one under All and set it up."
+                ? "No game has XeSS XMX set up yet. Pick one under All and set it up."
                 : "No games were detected in your Steam libraries. Add a folder under Libraries if your games live somewhere else."}
             </Notice>
           </PanelSectionRow>
@@ -123,11 +130,11 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
                 key={game.path}
                 label={game.name}
                 description={
-                  game.installed
-                    ? `OptiScaler · ${game.filename}`
+                  isSetup(game)
+                    ? `XeSS XMX · ${game.filename}`
                     : describePlayed(played.get(game.path)) ?? game.library ?? undefined
                 }
-                right={game.installed ? <Pill color="#2f6b3f">ON</Pill> : null}
+                right={isSetup(game) ? <Pill color="#2f6b3f">XMX</Pill> : null}
                 onClick={() => onOpenGame(game)}
               />
             );
@@ -172,8 +179,8 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
 }
 
 /** Newest first for Recent, and only the games that have a last-played time. */
-function filterGames(games: Game[], filter: string, played: Map<string, number | null>) {
-  if (filter === "setup") return games.filter((game) => game.installed);
+function filterGames(games: Game[], filter: string, played: Map<string, number | null>, isSetup: (game: Game) => boolean) {
+  if (filter === "setup") return games.filter(isSetup);
   if (filter !== "recent") return games;
   return games
     .filter((game) => played.get(game.path) != null)

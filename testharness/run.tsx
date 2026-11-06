@@ -66,6 +66,7 @@ Object.assign(fixtures, {
     default_proxy: "dxgi.dll",
   },
   prepare_payload: { ok: true },
+  get_xmx_setup_apps: { apps: ["1091500"] },
   list_libraries: [
     { path: "/home/deck/.local/share/Steam", name: "Internal Storage", source: "steam", game_count: 2, available: true },
     { path: "/run/media/SD", name: "SD Card (SD)", source: "custom", game_count: 1, available: true },
@@ -343,6 +344,7 @@ async function render(name: string, element: React.ReactElement) {
   const setUpOnly = qp.host.textContent!;
   console.log(`  filtering to the ones set up drops the rest: ${
     setUpOnly.includes("Cyberpunk 2077") && !setUpOnly.includes("Test Game 01")}`);
+  console.log(`  the set up rows carry the XMX pill: ${setUpOnly.includes("XMX")}`);
   await act(async () => {
     (findAll(qp.host, '[data-filter="all"]')[0] as HTMLElement).click();
   });
@@ -385,7 +387,7 @@ async function render(name: string, element: React.ReactElement) {
     const deep = await render("ManagerPage (deep link)", <ManagerPage />);
     console.log(`  a named game opens its own page, not Now Playing: ${
       findAll(deep.host, '[data-tab="now"]').length === 0 &&
-      deep.host.textContent!.includes("Installed as")}`);
+      deep.host.textContent!.includes("Open OptiScaler setup")}`);
 
     // Nothing named: the library list, as before.
     const plain = await render("ManagerPage (no target)", <ManagerPage />);
@@ -399,7 +401,7 @@ async function render(name: string, element: React.ReactElement) {
     await settle();
     console.log(`  an app id is looked up, even while the page is open: ${
       findAll(plain.host, '[data-tab="now"]').length === 0 &&
-      plain.host.textContent!.includes("Installed as")}`);
+      plain.host.textContent!.includes("Open OptiScaler setup")}`);
 
     // A non-Steam shortcut has no app manifest, so Steam has no install folder
     // to report and this used to be where every one of them stopped: "Steam
@@ -504,6 +506,14 @@ async function render(name: string, element: React.ReactElement) {
       onBack={() => {}}
     />
   );
+  // OptiScaler lives behind a button on the Setup tab; open it so the
+  // assertions below read the same content they always did.
+  await act(async () => {
+    const openOs = findAll(gd.host, '[data-mock="ButtonItem"]')
+      .find((n) => n.textContent === "Open OptiScaler setup");
+    if (openOs) (openOs as HTMLElement).click();
+  });
+  await settle();
   const tabs = findAll(gd.host, "[data-tab]").map((n) => n.getAttribute("data-tab"));
   console.log(`  tabs (basic mode): ${tabs.join(", ")}`);
   console.log(`  basic FG controls present: ${gd.host.textContent!.includes("Frame multiplier")}`);
@@ -543,6 +553,14 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
+  // OptiScaler lives behind a button on the Setup tab; open it so the
+  // assertions below read the same content they always did.
+  await act(async () => {
+    const openOs = findAll(gdAdv.host, '[data-mock="ButtonItem"]')
+      .find((n) => n.textContent === "Open OptiScaler setup");
+    if (openOs) (openOs as HTMLElement).click();
+  });
+  await settle();
   const advTabs = findAll(gdAdv.host, "[data-tab]").map((n) => n.getAttribute("data-tab"));
   console.log(`  tabs (advanced mode): ${advTabs.join(", ")}`);
   const advText = gdAdv.host.textContent!;
@@ -632,10 +650,18 @@ async function render(name: string, element: React.ReactElement) {
     logsText.includes("Write OptiScaler log")}`);
   console.log(`  with the runtime state it read out of the log: ${
     logsText.includes("FSR 4.0.2")}`);
+  // The bottom "OptiScaler setup" row now closes the whole block again.
   await act(async () => {
     (findAll(gd.host, '[data-back="setup"]')[0] as HTMLElement).click();
   });
   await settle();
+  await act(async () => {
+    (findAll(gd.host, '[data-back="setup"]')[0] as HTMLElement).click();
+  });
+  await settle();
+  console.log(`  hiding the OptiScaler block brings its button back: ${
+    gd.host.textContent!.includes("Open OptiScaler setup") &&
+    !gd.host.textContent!.includes("Installed as")}`);
 
   // -- a game that is not set up yet ----------------------------------------
   fixtures.get_game = { ...detail, install: { ...detail.install, installed: false } };
@@ -644,6 +670,14 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
+  // OptiScaler lives behind a button on the Setup tab; open it so the
+  // assertions below read the same content they always did.
+  await act(async () => {
+    const openOs = findAll(gdFresh.host, '[data-mock="ButtonItem"]')
+      .find((n) => n.textContent === "Open OptiScaler setup");
+    if (openOs) (openOs as HTMLElement).click();
+  });
+  await settle();
   const freshText = gdFresh.host.textContent!;
   console.log(`  a matched game says so before anything is written: ${
     freshText.includes("can be set up automatically")}`);
@@ -705,6 +739,14 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
+  // OptiScaler lives behind a button on the Setup tab; open it so the
+  // assertions below read the same content they always did.
+  await act(async () => {
+    const openOs = findAll(gdRef.host, '[data-mock="ButtonItem"]')
+      .find((n) => n.textContent === "Open OptiScaler setup");
+    if (openOs) (openOs as HTMLElement).click();
+  });
+  await settle();
   const refText = gdRef.host.textContent!;
   console.log("\n=== a game that needs REFramework ===");
   console.log(`  the step is on the list before anything is written: ${
@@ -741,6 +783,14 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
+  // OptiScaler lives behind a button on the Setup tab; open it so the
+  // assertions below read the same content they always did.
+  await act(async () => {
+    const openOs = findAll(gdRefManual.host, '[data-mock="ButtonItem"]')
+      .find((n) => n.textContent === "Open OptiScaler setup");
+    if (openOs) (openOs as HTMLElement).click();
+  });
+  await settle();
   const refManualText = gdRefManual.host.textContent!;
   console.log(`  a game with no known build says so instead of guessing: ${
     refManualText.includes("No REFramework build is known") &&
@@ -760,6 +810,14 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
+  // OptiScaler lives behind a button on the Setup tab; open it so the
+  // assertions below read the same content they always did.
+  await act(async () => {
+    const openOs = findAll(gdRefOff.host, '[data-mock="ButtonItem"]')
+      .find((n) => n.textContent === "Open OptiScaler setup");
+    if (openOs) (openOs as HTMLElement).click();
+  });
+  await settle();
   const refOffText = gdRefOff.host.textContent!;
   console.log(`  with the download off the game still says it needs REFramework: ${
     refOffText.includes("Install REFramework") &&
@@ -785,6 +843,14 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
+  // OptiScaler lives behind a button on the Setup tab; open it so the
+  // assertions below read the same content they always did.
+  await act(async () => {
+    const openOs = findAll(gdRefMissing.host, '[data-mock="ButtonItem"]')
+      .find((n) => n.textContent === "Open OptiScaler setup");
+    if (openOs) (openOs as HTMLElement).click();
+  });
+  await settle();
   const missingText = gdRefMissing.host.textContent!;
   console.log(`  an install missing it says so rather than looking finished: ${
     missingText.includes("REFramework is missing") &&
@@ -809,6 +875,14 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
+  // OptiScaler lives behind a button on the Setup tab; open it so the
+  // assertions below read the same content they always did.
+  await act(async () => {
+    const openOs = findAll(gdRefToggle.host, '[data-mock="ButtonItem"]')
+      .find((n) => n.textContent === "Open OptiScaler setup");
+    if (openOs) (openOs as HTMLElement).click();
+  });
+  await settle();
   // REFramework is a third-party DLL that can stop a game booting. When that
   // happens the only way to learn which of the two mods did it is to take one
   // out, so it has to be removable without removing OptiScaler.
@@ -833,6 +907,14 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
+  // OptiScaler lives behind a button on the Setup tab; open it so the
+  // assertions below read the same content they always did.
+  await act(async () => {
+    const openOs = findAll(gdRefOk.host, '[data-mock="ButtonItem"]')
+      .find((n) => n.textContent === "Open OptiScaler setup");
+    if (openOs) (openOs as HTMLElement).click();
+  });
+  await settle();
   const okText = gdRefOk.host.textContent!;
   console.log(`  and once it is there, it is ticked with the build it is: ${
     okText.includes("REFramework installed") && okText.includes("684ca77369ec")}`);
@@ -854,6 +936,14 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
+  // OptiScaler lives behind a button on the Setup tab; open it so the
+  // assertions below read the same content they always did.
+  await act(async () => {
+    const openOs = findAll(gdHotkey.host, '[data-mock="ButtonItem"]')
+      .find((n) => n.textContent === "Open OptiScaler setup");
+    if (openOs) (openOs as HTMLElement).click();
+  });
+  await settle();
   const hotkeyText = gdHotkey.host.textContent!;
   console.log(`  a plan that moves the overlay key says so before writing it: ${
     hotkeyText.includes("The overlay opens on a different key")}`);
@@ -868,6 +958,14 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
+  // OptiScaler lives behind a button on the Setup tab; open it so the
+  // assertions below read the same content they always did.
+  await act(async () => {
+    const openOs = findAll(gdPlain.host, '[data-mock="ButtonItem"]')
+      .find((n) => n.textContent === "Open OptiScaler setup");
+    if (openOs) (openOs as HTMLElement).click();
+  });
+  await settle();
   console.log(`  a game that does not need it never mentions it: ${
     !gdPlain.host.textContent!.includes("REFramework")}`);
 
@@ -920,6 +1018,14 @@ async function render(name: string, element: React.ReactElement) {
   const gdNoEntry = await render("GameDetail (no wiki entry)",
     <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
       status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+  // OptiScaler lives behind a button on the Setup tab; open it so the
+  // assertions below read the same content they always did.
+  await act(async () => {
+    const openOs = findAll(gdNoEntry.host, '[data-mock="ButtonItem"]')
+      .find((n) => n.textContent === "Open OptiScaler setup");
+    if (openOs) (openOs as HTMLElement).click();
+  });
+  await settle();
   const noEntryText = gdNoEntry.host.textContent!;
   console.log(`  no entry means no mode choice: ${
     findAll(gdNoEntry.host, '[data-tab="auto"]').length === 0}`);
@@ -932,6 +1038,18 @@ async function render(name: string, element: React.ReactElement) {
   fixtures.get_auto_plan = matchedPlan;
 
   // Live in-game control: the connected state must replace the restart advice.
+  // Back to the Setup tab, with the OptiScaler block reopened (the last test
+  // closed it on purpose).
+  await act(async () => {
+    (findAll(gd.host, '[data-tab="install"]')[0] as HTMLElement).click();
+  });
+  await settle();
+  await act(async () => {
+    const openOs = findAll(gd.host, '[data-mock="ButtonItem"]')
+      .find((n) => n.textContent === "Open OptiScaler setup");
+    if (openOs) (openOs as HTMLElement).click();
+  });
+  await settle();
   const liveText = gd.host.textContent!;
   console.log(`  live state is reported on the setup tab: ${
     liveText.includes("Live control connected")}`);
@@ -947,6 +1065,14 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
+  // OptiScaler lives behind a button on the Setup tab; open it so the
+  // assertions below read the same content they always did.
+  await act(async () => {
+    const openOs = findAll(gdOffline.host, '[data-mock="ButtonItem"]')
+      .find((n) => n.textContent === "Open OptiScaler setup");
+    if (openOs) (openOs as HTMLElement).click();
+  });
+  await settle();
   const offlineText = gdOffline.host.textContent!;
   console.log(`  live failure explained: ${offlineText.includes("could not attach")}`);
   console.log(`  live frame rate shown: ${gd.host.textContent!.includes("40.4 fps")}`);
@@ -966,6 +1092,14 @@ async function render(name: string, element: React.ReactElement) {
     const gdMode = await render("GameDetailModeSwitch",
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+  // OptiScaler lives behind a button on the Setup tab; open it so the
+  // assertions below read the same content they always did.
+  await act(async () => {
+    const openOs = findAll(gdMode.host, '[data-mock="ButtonItem"]')
+      .find((n) => n.textContent === "Open OptiScaler setup");
+    if (openOs) (openOs as HTMLElement).click();
+  });
+  await settle();
     const modeSwitch = findAll(gdMode.host, "[data-mode-switch]")[0];
     console.log(`  the mode switch is a real button: ${
       modeSwitch?.getAttribute("data-mock") === "DialogButton"}`);
@@ -1161,6 +1295,12 @@ async function render(name: string, element: React.ReactElement) {
     const down = await render("GameDetail (wiki unreachable)",
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    await act(async () => {
+      const openOs = findAll(down.host, '[data-mock="ButtonItem"]')
+        .find((n) => n.textContent === "Open OptiScaler setup");
+      if (openOs) (openOs as HTMLElement).click();
+    });
+    await settle();
     const downText = down.host.textContent!;
     console.log(`  a download failure is not called a missing entry: ${
       downText.includes("could not be downloaded") &&
@@ -1177,6 +1317,12 @@ async function render(name: string, element: React.ReactElement) {
     const downInstalled = await render("GameDetail (installed, wiki unreachable)",
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    await act(async () => {
+      const openOs = findAll(downInstalled.host, '[data-mock="ButtonItem"]')
+        .find((n) => n.textContent === "Open OptiScaler setup");
+      if (openOs) (openOs as HTMLElement).click();
+    });
+    await settle();
     console.log(`  an installed game says it too: ${
       downInstalled.host.textContent!.includes("could not be downloaded") &&
       !downInstalled.host.textContent!.includes("No wiki entry matched this game")}`);
@@ -1192,6 +1338,12 @@ async function render(name: string, element: React.ReactElement) {
     const miss = await render("GameDetail (genuine miss)",
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    await act(async () => {
+      const openOs = findAll(miss.host, '[data-mock="ButtonItem"]')
+        .find((n) => n.textContent === "Open OptiScaler setup");
+      if (openOs) (openOs as HTMLElement).click();
+    });
+    await settle();
     console.log(`  a game genuinely not on the list still says so: ${
       miss.host.textContent!.includes("No wiki entry matched this game") &&
       !miss.host.textContent!.includes("could not be downloaded")}`);
@@ -1224,6 +1376,12 @@ async function render(name: string, element: React.ReactElement) {
     const swr = await render("GameDetail (stale list)",
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    await act(async () => {
+      const openOs = findAll(swr.host, '[data-mock="ButtonItem"]')
+        .find((n) => n.textContent === "Open OptiScaler setup");
+      if (openOs) (openOs as HTMLElement).click();
+    });
+    await settle();
     console.log(`  a stale list still answers, from cache: ${
       swr.host.textContent!.includes("old-revision")}`);
 
@@ -1244,6 +1402,12 @@ async function render(name: string, element: React.ReactElement) {
     const fresh = await render("GameDetail (refresh lands)",
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    await act(async () => {
+      const openOs = findAll(fresh.host, '[data-mock="ButtonItem"]')
+        .find((n) => n.textContent === "Open OptiScaler setup");
+      if (openOs) (openOs as HTMLElement).click();
+    });
+    await settle();
     // First paint is the cached answer; the watch then sees a new fingerprint.
     fixtures.get_auto_plan = stale("newer-still");
     fixtures.wiki_status = { ...fixtures.wiki_status, revision: "newer-still" };
@@ -1287,6 +1451,12 @@ async function render(name: string, element: React.ReactElement) {
     const pending = await render("GameDetail (page pending)",
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    await act(async () => {
+      const openOs = findAll(pending.host, '[data-mock="ButtonItem"]')
+        .find((n) => n.textContent === "Open OptiScaler setup");
+      if (openOs) (openOs as HTMLElement).click();
+    });
+    await settle();
     const pendingText = pending.host.textContent!;
     console.log(`  it answers from the list row instead of waiting: ${
       pendingText.includes("can be set up automatically") &&
@@ -1353,6 +1523,12 @@ async function render(name: string, element: React.ReactElement) {
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
     await act(async () => {
+      const openOs = findAll(never.host, '[data-mock="ButtonItem"]')
+        .find((n) => n.textContent === "Open OptiScaler setup");
+      if (openOs) (openOs as HTMLElement).click();
+    });
+    await settle();
+    await act(async () => {
       await new Promise((r) => setTimeout(r, 2600));
     });
     await settle();
@@ -1395,6 +1571,12 @@ async function render(name: string, element: React.ReactElement) {
     const loop = await render("GameDetail (unmatchable revision)",
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    await act(async () => {
+      const openOs = findAll(loop.host, '[data-mock="ButtonItem"]')
+        .find((n) => n.textContent === "Open OptiScaler setup");
+      if (openOs) (openOs as HTMLElement).click();
+    });
+    await settle();
     const afterFirst = asked;
     await act(async () => {
       await new Promise((r) => setTimeout(r, 9000));
@@ -1420,6 +1602,12 @@ async function render(name: string, element: React.ReactElement) {
     const stuck = await render("GameDetail (backend hangs)",
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    await act(async () => {
+      const openOs = findAll(stuck.host, '[data-mock="ButtonItem"]')
+        .find((n) => n.textContent === "Open OptiScaler setup");
+      if (openOs) (openOs as HTMLElement).click();
+    });
+    await settle();
     console.log(`  it says it is checking, at first: ${
       stuck.host.textContent!.includes("Checking the OptiScaler wiki")}`);
     await act(async () => {

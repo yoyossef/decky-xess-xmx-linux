@@ -1,4 +1,4 @@
-"""Decky OptiScaler — manage OptiScaler per game from the Steam Deck UI."""
+"""Decky XeSS XMX — XeSS on Intel XMX, FSR bridging and OptiScaler, per game."""
 
 import os
 import sys
@@ -14,7 +14,7 @@ class Plugin:
     service: OptiScalerService = None
 
     async def _main(self):
-        decky.logger.info("Decky OptiScaler starting")
+        decky.logger.info("Decky XeSS XMX starting")
         self.service = OptiScalerService(
             plugin_dir=decky.DECKY_PLUGIN_DIR,
             settings_dir=decky.DECKY_PLUGIN_SETTINGS_DIR,
@@ -29,10 +29,10 @@ class Plugin:
         self.service.prime_wiki()
 
     async def _unload(self):
-        decky.logger.info("Decky OptiScaler unloading")
+        decky.logger.info("Decky XeSS XMX unloading")
 
     async def _uninstall(self):
-        decky.logger.info("Decky OptiScaler uninstalled")
+        decky.logger.info("Decky XeSS XMX uninstalled")
 
     # -- status ----------------------------------------------------------
     async def get_status(self) -> dict:
@@ -82,6 +82,9 @@ class Plugin:
 
     async def get_xmx_status(self, appid: str, package_dir: str = "") -> dict:
         return await self._xmx_rpc("get_xmx_status", appid, package_dir)
+
+    async def get_xmx_setup_apps(self) -> dict:
+        return await self._xmx_rpc("list_xmx_apps")
 
     async def plan_xmx(self, appid: str, package_dir: str, launch_options: str,
                        action: str = "enable", profile: dict | None = None) -> dict:

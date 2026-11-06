@@ -464,6 +464,9 @@ class OptiScalerService:
     async def get_xmx_status(self, appid, package_dir=""):
         return await self._xmx_call("get_xmx_status", appid, package_dir)
 
+    async def get_xmx_setup_apps(self):
+        return await self._xmx_call("list_xmx_apps")
+
     async def plan_xmx(self, appid, package_dir, launch_options, action="enable", profile=None):
         return await self._xmx_call("plan_xmx", appid, package_dir, launch_options, action, profile,
                                     mutation=True)

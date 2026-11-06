@@ -1,22 +1,21 @@
-# Decky OptiScaler
+# Decky XeSS XMX
 
-[![Build](https://github.com/danielcamilo1/decky-optiscaler/actions/workflows/build.yml/badge.svg)](https://github.com/danielcamilo1/decky-optiscaler/actions/workflows/build.yml)
-[![Latest release](https://img.shields.io/github/v/release/danielcamilo1/decky-optiscaler)](https://github.com/danielcamilo1/decky-optiscaler/releases/latest)
-[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/danielcamilo)
+A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for **Intel GPU
+handhelds**: it runs native XeSS (and, through a bridge, FSR) on Intel's XMX matrix engines
+via a validated patched-Mesa package, per game, from Game Mode. On top of that it keeps the
+full [OptiScaler](https://github.com/optiscaler/OptiScaler) manager — installed and configured
+per game with a gamepad, behind an explicit **OptiScaler** button on each game's Setup tab.
 
-A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin that installs and
-configures [OptiScaler](https://github.com/optiscaler/OptiScaler) per game from Game Mode
-(SteamOS, Bazzite, whatever you run). Frame generation, upscaler overrides and the rest of
-OptiScaler's settings, with a gamepad. The ones OptiScaler can change on the fly apply to the
-running game; the rest say plainly that they take effect on the next launch.
+This is a fork of
+[Decky OptiScaler](https://github.com/danielcamilo1/decky-optiscaler) by danielcamilo
+(see [Credits](#credits)); the upstream OptiScaler features and contract are unchanged.
 
 OptiScaler v0.9.4 is bundled, so installing works offline and every game gets the same build.
 
-> **Unofficial.** I am an independent developer with no connection to the OptiScaler project.
-> This plugin is not made, endorsed or supported by them — it bundles their release and drives
-> it from the Steam Deck UI. Please report problems with the plugin
-> [here](https://github.com/danielcamilo1/decky-optiscaler/issues), not to the OptiScaler
-> maintainers.
+> **Unofficial and experimental.** No connection to Intel, AMD or the OptiScaler project —
+> this bundles their releases and drives them from the Steam Deck UI. Report problems with
+> this fork [here](https://github.com/yoyossef/decky-xess-xmx-linux/issues), not to those
+> projects' maintainers.
 
 ## What it does
 
@@ -71,8 +70,8 @@ FSR version it ended up with — above the controls that change them.
 
 ## Installing
 
-Grab `Decky-OptiScaler-v*.zip` from the
-[latest release](https://github.com/danielcamilo1/decky-optiscaler/releases/latest), then either:
+Grab the plugin zip from this repository's releases (or build it with `npm run package`,
+which writes `out/Decky XeSS XMX.zip`), then either:
 
 - In Game Mode, open Decky's settings, turn on **Developer mode**, and use
   **Install Plugin from URL** with the zip's download link; or
@@ -106,9 +105,13 @@ and DLL restore are independent; neither silently performs the other operation.
 - Package validation is static. Flatpak path visibility, actual driver loading,
   game compatibility, and XMX rendering still require on-device validation.
 
-FSR4/B Boost and DLSS-input translation are not part of this feature. Existing
-OptiScaler features remain separate. Technical details and the RPC/recovery
-contract are in [the XeSS XMX notes](docs/xess-xmx.md).
+Each game also carries an **FSR Bridge** tab: with the upstream Proton hooks installed
+once, selected games get their FSR (including RDNA4-gated FSR 4 entries) translated to
+XeSS on XMX. Per-game by default; detected FSR-capable games are reported, never bridged
+without you asking. The library list's **Set up** filter tracks games this plugin has
+configured for XeSS XMX. FSR4/B Boost on RDNA4 hardware and DLSS-input translation are
+not part of this fork. Technical details and the RPC/recovery contract are in
+[the XeSS XMX notes](docs/xess-xmx.md).
 
 ## Live in-game control
 
@@ -190,6 +193,12 @@ supported by the OptiScaler project or any of the projects below; all it does is
 drive their work.
 
 - [OptiScaler](https://github.com/optiscaler/OptiScaler) and its wiki contributors.
+- [Decky OptiScaler](https://github.com/danielcamilo1/decky-optiscaler) — the upstream
+  plugin this fork is built on; its author maintains the OptiScaler management half.
+- [xess-xmx-linux](https://github.com/HHHHanasak1/xess-xmx-linux) — the XeSS XMX driver
+  package, patched Mesa drivers, CM kernels and Proton hooks that this fork's XeSS XMX
+  and FSR bridge features install, verify and scope per game. The bridge shim is that
+  project's file, run unmodified.
 - [Decky Framegen](https://github.com/xXJSONDeruloXx/Decky-Framegen) — reference for how
   OptiScaler is deployed into a game folder on Linux.
 - [Decky LSFG-VK](https://github.com/xXJSONDeruloXx/decky-lsfg-vk) — reference for the

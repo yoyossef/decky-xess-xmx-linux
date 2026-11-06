@@ -385,6 +385,21 @@ finally:
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
 
+    def test_list_xmx_apps_reports_only_real_records(self):
+        apps = self.manager.root/'apps'
+        apps.mkdir(parents=True, exist_ok=True)
+        (apps/'3357650').mkdir()
+        (apps/'3357650'/'installed.json').write_text('{}')
+        (apps/'3132990').mkdir()          # configured but the record is corrupt:
+        (apps/'3132990'/'installed.json').write_text('{corrupt')  # still installed
+        (apps/'292030').mkdir()           # a plan left over is not a setup
+        (apps/'0bogus').mkdir()
+        (apps/'0bogus'/'installed.json').write_text('{}')
+        self.assertEqual(self.manager.list_xmx_apps(), {'apps': ['3132990', '3357650']})
+
+    def test_list_xmx_apps_without_any_state_is_empty(self):
+        self.assertEqual(self.manager.list_xmx_apps(), {'apps': []})
+
     def test_logs_regular_file_swap_requires_exact_fd_authorization_in_uid0_namespace(self):
         self.run_root_namespace('''
 log = home/'steam-1817230.log'

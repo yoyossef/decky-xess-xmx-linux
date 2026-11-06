@@ -1,1 +1,1 @@
-"""Backend package for the Decky OptiScaler plugin."""
+"""Backend package for the Decky XeSS XMX plugin."""

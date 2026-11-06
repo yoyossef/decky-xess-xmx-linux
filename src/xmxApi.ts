@@ -51,6 +51,10 @@ export function isXmxStatus(value: unknown): value is XmxStatus {
 }
 
 export const getXmxStatus = callable<[appid: string, packageDir?: string], XmxStatus | XmxResult>("get_xmx_status");
+export interface XmxSetupApps {
+  apps: string[];
+}
+export const getXmxSetupApps = callable<[], XmxSetupApps | XmxResult>("get_xmx_setup_apps");
 export const planXmx = callable<[appid: string, packageDir: string, launchOptions: string, action?: XmxAction, profile?: XmxProfile], XmxPlan>("plan_xmx");
 export const applyXmx = callable<[appid: string, planId: string], XmxApply>("apply_xmx");
 export const finishXmx = callable<[appid: string, planId: string, launchOptions: string], XmxResult>("finish_xmx");
