@@ -1887,6 +1887,35 @@ finally:
         self.assertFalse(result['ok'], result)
         self.assertIn('native', result['error'].lower())
 
+    def test_fsr_only_game_enables_through_the_bridge_not_by_dll_magic(self):
+        # Stellar Blade shape: no libxess.dll at all, but an amd_fidelityfx_dx12.dll.
+        # Downloading a XeSS DLL into such a game would be a dead file the exe never
+        # imports; the supported route is the FSR bridge, so the gate opens when and
+        # only when the profile actually asks to bridge.
+        (self.game/'libxess.dll').unlink()
+        (self.game/'amd_fidelityfx_dx12.dll').write_bytes(pe64())
+        plain = self.manager.plan_xmx('1817230', str(self.package), '')
+        self.assertFalse(plain['ok'], plain)
+        self.assertIn('bridge', plain['error'].lower())
+        self.assertIn('fsr', plain['error'].lower())
+        bridged = self.manager.plan_xmx(
+            '1817230', str(self.package), '', 'enable',
+            {'driver': 'default', 'discovery': 'auto', 'diagnostics': False,
+             'fg': 0, 'bridge': 1, 'sdk_latest': False})
+        self.assertTrue(bridged['ok'], bridged)
+
+    def test_game_without_xess_and_without_fsr_loader_stays_refused(self):
+        # No DLL to call and no loader to translate: a DLL download cannot invent an
+        # upscaler; the plan must still refuse with the reason, without writing.
+        (self.game/'libxess.dll').unlink()
+        result = self.manager.plan_xmx(
+            '1817230', str(self.package), '', 'enable',
+            {'driver': 'default', 'discovery': 'auto', 'diagnostics': False,
+             'fg': 0, 'bridge': 1, 'sdk_latest': False})
+        self.assertFalse(result['ok'], result)
+        self.assertIn('neither', result['error'].lower())
+        self.assertIsNone(self.manager._journal('1817230'))
+
     def test_hardlinked_lock_is_refused_without_chmodding_the_other_name(self):
         victim = self.home/'unrelated-user-file'
         victim.write_bytes(b'keep bytes and permissions')

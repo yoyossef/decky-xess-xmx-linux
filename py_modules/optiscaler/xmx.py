@@ -533,7 +533,21 @@ class Manager:
             elif previous:
                 raise ValueError('Already enabled; disable first')
             if not self._native_xess(appid)['found']:
-                raise ValueError('No native game XeSS DLL found; translation/OptiScaler installation is outside v1')
+                # A game only gains XeSS two ways: it calls a native libxess itself,
+                # or our bridge translates the FSR loader it does call. Installing a
+                # DLL a game never imports would be a dead file, so the gate opens
+                # for the bridge route only when the profile actually bridges.
+                fsr = self._fsr_loaders(appid)['found']
+                if profile['bridge'] in (1, 2) and fsr:
+                    pass
+                elif profile['bridge'] in (1, 2):
+                    raise ValueError('This game has neither a native XeSS DLL nor an FSR loader to bridge; '
+                                     'a downloaded DLL cannot give a game an upscaler it never calls')
+                elif fsr:
+                    raise ValueError('No native game XeSS DLL found, but the game ships FSR: '
+                                     'switch the FSR bridge on to run it on XeSS')
+                else:
+                    raise ValueError('No native game XeSS DLL found; translation/OptiScaler installation is outside v1')
             if not self._gpu()['xmx_capable']:
                 raise ValueError('No GPU with v1-validated XMX device capability (Intel 0xb080)')
             diagnostics = self._package(package_dir)
@@ -1406,6 +1420,30 @@ class Manager:
             installed = (app/'installed.json').exists()
             return {'ok': True, 'installed': installed,
                     'phase': 'enabled' if installed else 'disabled', 'pending_launch': False}
+
+    def _fsr_loaders(self, appid):
+        """The game's own FidelityFX loaders: what an FSR->XeSS bridge translates."""
+        result = {'found': False, 'files': []}
+        game = steam.find_by_appid(self.home, appid)
+        if not game or game.get('source') != 'steam' or game.get('appid') != appid:
+            return result
+        folder = Path(game['path']).resolve()
+        if not folder.is_relative_to(Path(game['library']).resolve()/'steamapps/common'):
+            return result
+        for directory, children, files in os.walk(folder, followlinks=False):
+            path = Path(directory)
+            children[:] = [name for name in children
+                           if not (path/name).is_symlink() and name.casefold() not in
+                            ('decky_optiscaler_backup_files', '.decky_optiscaler_backup_files',
+                             'backup', 'backups')]
+            for name in files:
+                low = name.lower()
+                if low.startswith('amd_fidelityfx') and low.endswith('.dll'):
+                    dll = path/name
+                    if not dll.is_symlink():
+                        result['files'].append(str(dll))
+        result['found'] = bool(result['files'])
+        return result
 
     def _native_xess(self, appid):
         result = {'found': False, 'files': [], 'compatibility_verified': False,
