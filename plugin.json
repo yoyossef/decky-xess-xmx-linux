@@ -1,6 +1,7 @@
 {
   "name": "Decky XeSS XMX",
-  "author": "kmilovm91722",
+  "version": "1.0.0",
+  "author": "yoyossef",
   "flags": [],
   "api_version": 1,
   "publish": {
