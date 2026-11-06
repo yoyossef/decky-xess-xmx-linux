@@ -62,6 +62,9 @@ export function NukeSection({ appid, running, status, blocked, busyRef, refresh 
         + "Fix the launch options to match, then press Finish nuke.");
     const finished = await nukeFinishXmx(appid, planId, desired);
     if (!finished?.ok) throw new Error(finished?.error || "Nuke finish failed.");
+    // Same live signal as the enable/disable flows: the header badge and any
+    // open list must stop claiming this game is set up.
+    window.dispatchEvent(new CustomEvent("xmx-setup-changed", { detail: appid }));
     settle(request, "Nuke complete: state cleared and launch options restored. Refresh to re-detect.");
     refresh();
   };

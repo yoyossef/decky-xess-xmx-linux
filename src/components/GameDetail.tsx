@@ -169,7 +169,7 @@ export function GameDetail({
   useEffect(() => {
     if (appid === null || appid === undefined) { setXmxSetup(null); return; }
     let alive = true;
-    void getXmxSetupApps()
+    const read = () => getXmxSetupApps()
       .then((setup) => {
         if (!alive || !("apps" in setup) || !Array.isArray(setup.apps)) return;
         const hit = setup.apps.find((entry) =>
@@ -181,7 +181,12 @@ export function GameDetail({
       // A failed lookup must never claim setup, and must never deny it with
       // a stale "not set up" either: keep whatever the last truth was.
       .catch(() => {});
-    return () => { alive = false; };
+    void read();
+    const onSetupChanged = (event: Event) => {
+      if ((event as CustomEvent).detail === undefined || String((event as CustomEvent).detail) === String(appid)) void read();
+    };
+    window.addEventListener("xmx-setup-changed", onSetupChanged);
+    return () => { alive = false; window.removeEventListener("xmx-setup-changed", onSetupChanged); };
   }, [appid]);
   const isRunning =
     runningGame !== null && appid !== null && String(runningGame.appid) === appid;

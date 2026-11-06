@@ -349,6 +349,23 @@ async function render(name: string, element: React.ReactElement) {
   console.log(`  a numeric appid still lands in the Set up list: ${setUpOnly.includes("Cyberpunk 2077")}`);
   console.log(`  the row badges the Mesa build: ${setUpOnly.includes("Mesa 26.1.2")}`);
   console.log(`  the row badges the live FSR 4 Bridge: ${setUpOnly.includes("FSR 4 Bridge")}`);
+  // A setup change anywhere in the plugin must follow live, without reloading:
+  // the nuke/disable the user just performed is the last thing they should
+  // have to navigate away and back for.
+  fixtures.get_xmx_setup_apps = { apps: [] };
+  await act(async () => {
+    window.dispatchEvent(new window.CustomEvent("xmx-setup-changed", { detail: "1091500" }));
+  });
+  await settle();
+  console.log(`  a nuke elsewhere empties the Set up list live: ${
+    (qp.host.textContent ?? "").includes("No game has XeSS XMX set up yet")}`);
+  fixtures.get_xmx_setup_apps = { apps: [{ appid: "1091500", bridge: true, mesa: "26.1.2" }] };
+  await act(async () => {
+    window.dispatchEvent(new window.CustomEvent("xmx-setup-changed", { detail: "1091500" }));
+  });
+  await settle();
+  console.log(`  an enable elsewhere restores the Set up list live: ${
+    (qp.host.textContent ?? "").includes("Cyberpunk 2077")}`);
   await act(async () => {
     (findAll(qp.host, '[data-filter="all"]')[0] as HTMLElement).click();
   });

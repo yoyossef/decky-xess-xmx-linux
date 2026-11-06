@@ -180,6 +180,10 @@ function XmxPanelSession({ appid, running }: Props) {
     if (mounted.current) {
       setTransaction({ ...controller.state });
       if (controller.state.success || controller.state.needsRefresh) await refresh(packageDir, false, controller.state.error);
+      // The page header badges this game's setup state; tell it the record
+      // just moved (enable/disable/nuke) so the badge follows without a reload.
+      if (controller.state.success)
+        window.dispatchEvent(new CustomEvent("xmx-setup-changed", { detail: appid }));
     }
     operationRef.current = false;
     scope.current.owner = null;

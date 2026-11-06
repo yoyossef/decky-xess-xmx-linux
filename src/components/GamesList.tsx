@@ -22,6 +22,24 @@ const PAGE_SIZE = 20;
  * will say — the previous "show only the ones set up" button could not help
  * with a game that is not set up yet, which is the whole reason to be here.
  */
+// Steam hands appids around as numbers in some paths and strings in others;
+// the join must survive both, or a set-up game vanishes from its own list.
+function readXmxSetupApps() {
+  return getXmxSetupApps()
+    .then((setup) => {
+      const details = new Map<string, { bridge: boolean; mesa: string | null }>();
+      if ("apps" in setup && Array.isArray(setup.apps)) {
+        for (const entry of setup.apps) {
+          if (typeof entry === "string") details.set(entry, { bridge: false, mesa: null });
+          else if (entry && entry.appid != null)
+            details.set(String(entry.appid), { bridge: Boolean(entry.bridge), mesa: entry.mesa ?? null });
+        }
+      }
+      return details;
+    })
+    .catch(() => new Map<string, { bridge: boolean; mesa: string | null }>());
+}
+
 export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) {
   const [games, setGames] = useState<Game[] | null>(null);
   const [xmxApps, setXmxApps] = useState<Map<string, { bridge: boolean; mesa: string | null }>>(new Map());
@@ -37,19 +55,8 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
     try {
       // "Set up" means configured here (XeSS XMX), not whatever OptiScaler
       // somebody dropped in by hand; a failed lookup must never empty the list.
-      const [found, setup] = await Promise.all([listAllGames(), getXmxSetupApps().catch(() => ({ apps: [] }))]);
-      // Steam hands appids around as numbers in some paths and strings in
-      // others; the join must survive both, or a set-up game vanishes from
-      // its own list.
-      const details = new Map<string, { bridge: boolean; mesa: string | null }>();
-      if ("apps" in setup && Array.isArray(setup.apps)) {
-        for (const entry of setup.apps) {
-          if (typeof entry === "string") details.set(entry, { bridge: false, mesa: null });
-          else if (entry && entry.appid != null)
-            details.set(String(entry.appid), { bridge: Boolean(entry.bridge), mesa: entry.mesa ?? null });
-        }
-      }
-      setXmxApps(details);
+      const [found, setup] = await Promise.all([listAllGames(), readXmxSetupApps()]);
+      setXmxApps(setup);
       // Never trust the shape: a backend that failed mid-scan must not take the
       // whole page down with it.
       const list = Array.isArray(found) ? found : [];
@@ -66,6 +73,14 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // When a game is enabled/disabled/nuke'd anywhere in the plugin, the Set up
+  // filter and its badges follow without leaving the page.
+  useEffect(() => {
+    const onSetupChanged = () => { void readXmxSetupApps().then(setXmxApps); };
+    window.addEventListener("xmx-setup-changed", onSetupChanged);
+    return () => { window.removeEventListener("xmx-setup-changed", onSetupChanged); };
+  }, []);
 
   useEffect(() => {
     if (!pendingFocus.current) return;
