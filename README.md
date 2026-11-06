@@ -150,20 +150,21 @@ settings directory.
 
 ## Screenshots
 
-<!-- TODO(yous): Quick Access panel over a running game — XMX active, frame rate visible -->
-![XeSS XMX over a running game](assets/quick-access.jpg)
+![The plugin overview on an ONEXPLAYER 3](assets/Overview.png)
 
-<!-- TODO(yous): the Games list with the Set up filter and the XMX / Mesa / FSR 4 Bridge badges -->
-![Set up filter with badges](assets/setup-list.jpg)
+The plugin on an ONEXPLAYER 3 (Arc B390): the game list, the Set up filter and the
+badges — XMX, the Mesa build, and the live FSR 4 Bridge.
+
+![FSR 4 running on XMX in Pragmata, through the bridge](assets/Pragmata_FSR4_proof.png)
+
+Proof of the bridge at work: Pragmata has no XeSS — its FSR 4 entries run on XeSS on
+XMX with `FSR=xess`, exactly the version the game thinks it's using.
 
 <!-- TODO(yous): a game's Setup tab with the XeSS XMX panel and the file-by-file preview -->
 ![Setup and preview](assets/setup-preview.jpg)
 
 <!-- TODO(yous): the library context menu with the "XeSS XMX Settings" entry -->
 ![Library context menu](assets/context-menu.jpg)
-
-<!-- TODO(yous): the FSR bridge panel — hooks installed, one game bridged -->
-![FSR 4 Bridge](assets/fsr-bridge.jpg)
 
 <!-- TODO(yous): OptiScaler manager behind its button (advanced settings / live control) -->
 ![OptiScaler manager](assets/optiscaler.jpg)
