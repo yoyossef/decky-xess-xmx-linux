@@ -23,6 +23,76 @@ manager parked behind an explicit button for the games XeSS XMX doesn't serve.
 > below. Report issues [here](https://github.com/yoyossef/decky-xess-xmx-linux/issues) — never
 > to those projects' maintainers.
 
+## Requirements
+
+- **Decky Loader** on a native Steam install — the Flatpak Steam is not supported.
+- An **Intel GPU with XMX** on the `xe`/`i915` kernel driver: Xe3 (validated on the ONEXPLAYER
+  3, Arc B390), Xe2 (user-validated on Arc B580), Xe-HPG (user-validated on Arc A310). Meteor
+  Lake has no XMX units; other Intel GPUs are unverified, not assumed working.
+- Prefer a stable Proton version rather than Proton Experimental (can cause black screens rendering)
+- An internet connection for first-time setup: the plugin **fetches the latest
+  [xess-xmx-linux](https://github.com/HHHHanasak1/xess-xmx-linux) release from GitHub itself** —
+  the archive URL, size and SHA256 come from the release metadata and the download is verified
+  before it is unpacked into the plugin's own folder, along with its dependency set (Intel
+  compiler, Vulkan runtime, FidelityFX components) from pinned URLs. A **Update package** button
+  checks for newer upstream releases. Prefer it pre-downloaded? Point the plugin at your own
+  extracted package folder instead — same checksums, same validation. Nothing is ever applied
+  to a game until you preview and confirm that game's setup.
+- One of `7z`, `7zz`, `7za`, `7zr` or `bsdtar` for the bundled OptiScaler release (SteamOS has
+  both p7zip and bsdtar; it runs once, on first install).
+- Games on their **DX12 renderer** — XeSS/FSR is selected in each game's own graphics settings.
+
+## Installing the plugin
+
+1. Grab the plugin zip from this repository's [releases](https://github.com/yoyossef/decky-xess-xmx-linux/releases)
+   (or build it, below — `pnpm build && python3 scripts/package.py` writes
+   `out/Decky XeSS XMX.zip`).
+2. Either:
+   - In Game Mode, open Decky's settings, turn on **Developer mode**, and use
+     **Install Plugin from URL** with the zip's download link; or
+   - unpack the zip into `~/homebrew/plugins/` (folder name `Decky XeSS XMX`) and restart
+     Decky Loader.
+3. The XeSS XMX driver package itself is fetched on first setup, from the upstream GitHub
+   release with checksum verification (next section) — or point the plugin at a copy you
+   downloaded yourself. Nothing is applied to any game until you preview and confirm it.
+
+## Setting a game up
+
+1. Open the game in the plugin (Games tab, or **“XeSS XMX Settings”** in its library context
+   menu).
+2. On **Setup**, let the XeSS XMX panel **prepare the package** — it downloads the latest
+   xess-xmx-linux release, verifies it against the release's SHA256, and unpacks it into the
+   plugin's own folder (the **Update package** button re-checks upstream later). Or point the
+   panel at your own extracted copy — same checksums, same validation.
+3. Pick the Mesa variant for this game, review the **preview** — every file, every launch
+   option, before it is written — and confirm.
+4. Launch the game, select **XeSS** on its DX12 renderer. The first launch compiles the game's
+   kernels once (a minute or two); after that they come from `~/.cache/xess-xmx`.
+5. Game without XeSS? Install the **FSR bridge** once from the Setup tab, then toggle the
+   bridge on that game and pick FSR in the game.
+
+**Disable removes exactly what enable added** — files and launch options — and the **nuke** is
+there for when state goes sideways. Disable XeSS XMX per game *before* removing the plugin or
+deleting its settings: the per-game launch wrapper and recovery state live in the plugin
+settings directory.
+
+## Screenshots
+
+![The plugin overview on an ONEXPLAYER 3](assets/Overview.png)
+
+The plugin on an ONEXPLAYER 3 (Arc B390): the game list, the Set up filter and the
+badges — XMX, the Mesa build, and the live FSR 4 Bridge.
+
+![FSR 4 running on XMX in Pragmata, through the bridge](assets/Pragmata_FSR4_proof.png)
+
+Proof of the bridge at work: Pragmata has no XeSS — its FSR 4 entries run on XeSS on
+XMX with `FSR=xess`, exactly the version the game thinks it's using.
+
+![Setup and preview](assets/setup-preview.png)
+![Setup and preview](assets/setup-preview_1.png)
+![Setup and preview](assets/setup-preview_2.png)
+A game's Setup tab with the XeSS XMX panel and the FSR 4 bridge
+
 ## What it does
 
 ### XeSS on XMX, per game
@@ -103,79 +173,6 @@ v0.9.4 is bundled, so setup works offline and every game gets the same build:
 - **FSR 4.1.1b on the original Steam Deck**, file backup/restore, [OptiPatcher](https://github.com/optiscaler/OptiPatcher)
   bundled. See [docs/steam-deck-fsr4.md](docs/steam-deck-fsr4.md) and the upstream project's
   docs; that contract is unchanged.
-
-## Requirements
-
-- **Decky Loader** on a native Steam install — the Flatpak Steam is not supported.
-- An **Intel GPU with XMX** on the `xe`/`i915` kernel driver: Xe3 (validated on the ONEXPLAYER
-  3, Arc B390), Xe2 (user-validated on Arc B580), Xe-HPG (user-validated on Arc A310). Meteor
-  Lake has no XMX units; other Intel GPUs are unverified, not assumed working.
-- An internet connection for first-time setup: the plugin **fetches the latest
-  [xess-xmx-linux](https://github.com/HHHHanasak1/xess-xmx-linux) release from GitHub itself** —
-  the archive URL, size and SHA256 come from the release metadata and the download is verified
-  before it is unpacked into the plugin's own folder, along with its dependency set (Intel
-  compiler, Vulkan runtime, FidelityFX components) from pinned URLs. A **Update package** button
-  checks for newer upstream releases. Prefer it pre-downloaded? Point the plugin at your own
-  extracted package folder instead — same checksums, same validation. Nothing is ever applied
-  to a game until you preview and confirm that game's setup.
-- One of `7z`, `7zz`, `7za`, `7zr` or `bsdtar` for the bundled OptiScaler release (SteamOS has
-  both p7zip and bsdtar; it runs once, on first install).
-- Games on their **DX12 renderer** — XeSS/FSR is selected in each game's own graphics settings.
-
-## Installing the plugin
-
-1. Grab the plugin zip from this repository's [releases](https://github.com/yoyossef/decky-xess-xmx-linux/releases)
-   (or build it, below — `pnpm build && python3 scripts/package.py` writes
-   `out/Decky XeSS XMX.zip`).
-2. Either:
-   - In Game Mode, open Decky's settings, turn on **Developer mode**, and use
-     **Install Plugin from URL** with the zip's download link; or
-   - unpack the zip into `~/homebrew/plugins/` (folder name `Decky XeSS XMX`) and restart
-     Decky Loader.
-3. The XeSS XMX driver package itself is fetched on first setup, from the upstream GitHub
-   release with checksum verification (next section) — or point the plugin at a copy you
-   downloaded yourself. Nothing is applied to any game until you preview and confirm it.
-
-## Setting a game up
-
-1. Open the game in the plugin (Games tab, or **“XeSS XMX Settings”** in its library context
-   menu).
-2. On **Setup**, let the XeSS XMX panel **prepare the package** — it downloads the latest
-   xess-xmx-linux release, verifies it against the release's SHA256, and unpacks it into the
-   plugin's own folder (the **Update package** button re-checks upstream later). Or point the
-   panel at your own extracted copy — same checksums, same validation.
-3. Pick the Mesa variant for this game, review the **preview** — every file, every launch
-   option, before it is written — and confirm.
-4. Launch the game, select **XeSS** on its DX12 renderer. The first launch compiles the game's
-   kernels once (a minute or two); after that they come from `~/.cache/xess-xmx`.
-5. Game without XeSS? Install the **FSR bridge** once from the Setup tab, then toggle the
-   bridge on that game and pick FSR in the game.
-
-**Disable removes exactly what enable added** — files and launch options — and the **nuke** is
-there for when state goes sideways. Disable XeSS XMX per game *before* removing the plugin or
-deleting its settings: the per-game launch wrapper and recovery state live in the plugin
-settings directory.
-
-## Screenshots
-
-![The plugin overview on an ONEXPLAYER 3](assets/Overview.png)
-
-The plugin on an ONEXPLAYER 3 (Arc B390): the game list, the Set up filter and the
-badges — XMX, the Mesa build, and the live FSR 4 Bridge.
-
-![FSR 4 running on XMX in Pragmata, through the bridge](assets/Pragmata_FSR4_proof.png)
-
-Proof of the bridge at work: Pragmata has no XeSS — its FSR 4 entries run on XeSS on
-XMX with `FSR=xess`, exactly the version the game thinks it's using.
-
-<!-- TODO(yous): a game's Setup tab with the XeSS XMX panel and the file-by-file preview -->
-![Setup and preview](assets/setup-preview.jpg)
-
-<!-- TODO(yous): the library context menu with the "XeSS XMX Settings" entry -->
-![Library context menu](assets/context-menu.jpg)
-
-<!-- TODO(yous): OptiScaler manager behind its button (advanced settings / live control) -->
-![OptiScaler manager](assets/optiscaler.jpg)
 
 ## Building
 
