@@ -84,7 +84,7 @@ class Plugin:
         return await self._xmx_rpc("get_xmx_status", appid, package_dir)
 
     async def get_xmx_setup_apps(self) -> dict:
-        return await self._xmx_rpc("list_xmx_apps")
+        return await self._xmx_rpc("get_xmx_setup_apps")
 
     async def plan_xmx(self, appid: str, package_dir: str, launch_options: str,
                        action: str = "enable", profile: dict | None = None) -> dict:
