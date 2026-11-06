@@ -2614,4 +2614,44 @@ for (const malicious of [false, true]) {
   });
 }
 
+await test("nuke stays reachable when the installation status is unavailable", async () => {
+  const old = { ...fixtures };
+  fixtures.get_xmx_status = { ok: false, error: "Exactly one existing Steam prefix is required" };
+  fixtures.nuke_plan_xmx = { ok: true, plan_id: "b".repeat(32), legacy: false, files: [
+    { target: "/state/apps/42/xess.conf", action: "remove" }], warnings: [], desired_launch_options: "" };
+  const p = await renderPanel();
+  try {
+    await press(p.host, "Nuke this game's XMX install…");
+    assert.doesNotMatch(p.host.textContent ?? "", /Nuke blocked/);
+    assert.match(p.host.textContent ?? "", /delete \/state\/apps\/42\/xess\.conf/);
+    assert.ok(Array.from(p.host.querySelectorAll('[data-mock="ButtonItem"]'))
+      .some(el => el.textContent === "Apply nuke (1 file)"), "apply button shown");
+  } finally { await p.cleanup(); Object.assign(fixtures, old); }
+});
+
+await test("nuke stays reachable while a pending transaction needs recovery", async () => {
+  const old = { ...fixtures };
+  fixtures.get_xmx_status = { ...statusFixture, pending: { action: "enable", plan_id: "c".repeat(32),
+    phase: "pending_enable", old_launch_options: "", desired_launch_options: "XMX=1 %command%" } };
+  fixtures.nuke_plan_xmx = { ok: true, plan_id: "d".repeat(32), legacy: false, files: [], warnings: [
+    "A pending transaction was found; nuke supersedes it."], desired_launch_options: "" };
+  const p = await renderPanel();
+  try {
+    await press(p.host, "Nuke this game's XMX install…");
+    assert.doesNotMatch(p.host.textContent ?? "", /Nuke blocked/);
+    assert.match(p.host.textContent ?? "", /nuke supersedes/);
+  } finally { await p.cleanup(); Object.assign(fixtures, old); }
+});
+
+await test("nuke still refuses while the game is running", async () => {
+  const old = { ...fixtures };
+  fixtures.get_xmx_status = { ok: false, error: "Exactly one existing Steam prefix is required" };
+  (Router as any).MainRunningApp = { appid: 42 };
+  const p = await renderPanel();
+  try {
+    await press(p.host, "Nuke this game's XMX install…");
+    assert.match(p.host.textContent ?? "", /Nuke blocked: stop this game first/);
+  } finally { (Router as any).MainRunningApp = undefined; await p.cleanup(); Object.assign(fixtures, old); }
+});
+
 console.log(`XeSS XMX: ${checks} checks passed`);

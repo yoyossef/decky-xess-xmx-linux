@@ -223,6 +223,20 @@ function XmxPanelSession({ appid, running }: Props) {
     if (statusRef.current.legacy) return "legacy unmanaged installation — changes are blocked";
     return null;
   };
+  // The escape hatch must stay reachable when the status cannot be read: a
+  // broken prefix or corrupt journals are exactly the states nuke unwinds.
+  // So this gate deliberately never consults the status — unlike
+  // editBlockReason it only refuses when a nuke would race something.
+  const nukeBlockReason = (): string | null => {
+    if (!mounted.current) return "the panel was closed";
+    if (nukeBusy.current) return "the nuke flow is running";
+    if (operationRef.current || controller.state.busy) return "another operation is in progress";
+    if (scope.current.owner) return "another section owns this game right now";
+    if (scope.current.dllRecovery) return "the DLL recovery flow is active";
+    if (runningRef.current) return "stop this game first";
+    if (!appid) return "no game selected";
+    return null;
+  };
   const dropOption = (option: unknown) => String((option as { data?: unknown })?.data ?? option);
   const editProfile = (change: Partial<XmxProfile>) => {
     const blockedBy = editBlockReason();
@@ -286,7 +300,7 @@ function XmxPanelSession({ appid, running }: Props) {
   return (
     <><PanelSection title="XeSS XMX">
       <PanelSectionRow>
-        <div>{status?.legacy ? "Legacy unmanaged installation — changes blocked. Use the original installer to remove it; this manager will not adopt or migrate it." : status?.ok ? (status.installed ? "Enabled (configured)" : "Not installed") : "Installation status unavailable — Refresh to retry."}</div>
+        <div>{status?.legacy ? "Legacy unmanaged installation — changes blocked. Use the original installer to remove it; this manager will not adopt or migrate it." : status?.ok ? (status.installed ? "Enabled (configured)" : "Not installed") : `Installation status unavailable${status?.error ? `: ${status.error}` : ""} — Refresh to retry, or use the Danger zone below to clear whatever is left.`}</div>
         <div>Runtime unverified — configured does not mean the game is using XMX.</div>
         {!packageDir.trim() ? <div role="alert">Choose an existing package in Details → Package folder, then Refresh.</div>
           : status?.package?.valid === false ? <div role="alert">Package needs attention. Check Details → Package folder, then Refresh.</div> : null}
@@ -416,7 +430,7 @@ function XmxPanelSession({ appid, running }: Props) {
       </> : null}
     </PanelSection>
     {appid ? <NukeSection appid={appid} running={running} status={status}
-      blocked={() => editBlockReason(false)} busyRef={nukeBusy}
+      blocked={() => nukeBlockReason()} busyRef={nukeBusy}
       refresh={() => { void refresh(packageDir, false); }} /> : null}
     <XessDllPanel appid={appid} running={running} prefixBlocked={loading || transaction.busy || running || !appid || !status?.ok || Boolean(status.legacy) || needsRecovery || scope.current.owner === "prefix" || nukeBusy.current} interlock={dllInterlock} />
     </>
