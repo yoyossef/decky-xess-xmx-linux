@@ -110,9 +110,14 @@ v0.9.4 is bundled, so setup works offline and every game gets the same build:
 - An **Intel GPU with XMX** on the `xe`/`i915` kernel driver: Xe3 (validated on the ONEXPLAYER
   3, Arc B390), Xe2 (user-validated on Arc B580), Xe-HPG (user-validated on Arc A310). Meteor
   Lake has no XMX units; other Intel GPUs are unverified, not assumed working.
-- An extracted [xess-xmx-linux](https://github.com/HHHHanasak1/xess-xmx-linux) release package,
-  which **you** download. The plugin never downloads the package or any driver — it validates
-  the one you point it at against pinned SHA256s, then installs it per game.
+- An internet connection for first-time setup: the plugin **fetches the latest
+  [xess-xmx-linux](https://github.com/HHHHanasak1/xess-xmx-linux) release from GitHub itself** —
+  the archive URL, size and SHA256 come from the release metadata and the download is verified
+  before it is unpacked into the plugin's own folder, along with its dependency set (Intel
+  compiler, Vulkan runtime, FidelityFX components) from pinned URLs. A **Update package** button
+  checks for newer upstream releases. Prefer it pre-downloaded? Point the plugin at your own
+  extracted package folder instead — same checksums, same validation. Nothing is ever applied
+  to a game until you preview and confirm that game's setup.
 - One of `7z`, `7zz`, `7za`, `7zr` or `bsdtar` for the bundled OptiScaler release (SteamOS has
   both p7zip and bsdtar; it runs once, on first install).
 - Games on their **DX12 renderer** — XeSS/FSR is selected in each game's own graphics settings.
@@ -127,15 +132,18 @@ v0.9.4 is bundled, so setup works offline and every game gets the same build:
      **Install Plugin from URL** with the zip's download link; or
    - unpack the zip into `~/homebrew/plugins/` (folder name `Decky XeSS XMX`) and restart
      Decky Loader.
-3. Download and extract an xess-xmx-linux release somewhere it can stay — then point the
-   plugin at it (next section). Nothing on this list happens automatically, on purpose.
+3. The XeSS XMX driver package itself is fetched on first setup, from the upstream GitHub
+   release with checksum verification (next section) — or point the plugin at a copy you
+   downloaded yourself. Nothing is applied to any game until you preview and confirm it.
 
 ## Setting a game up
 
 1. Open the game in the plugin (Games tab, or **“XeSS XMX Settings”** in its library context
    menu).
-2. On **Setup**, point the XeSS XMX panel at your extracted `xess-xmx-linux` package — it is
-   verified against pinned checksums before anything else happens.
+2. On **Setup**, let the XeSS XMX panel **prepare the package** — it downloads the latest
+   xess-xmx-linux release, verifies it against the release's SHA256, and unpacks it into the
+   plugin's own folder (the **Update package** button re-checks upstream later). Or point the
+   panel at your own extracted copy — same checksums, same validation.
 3. Pick the Mesa variant for this game, review the **preview** — every file, every launch
    option, before it is written — and confirm.
 4. Launch the game, select **XeSS** on its DX12 renderer. The first launch compiles the game's
