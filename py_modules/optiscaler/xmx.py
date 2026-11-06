@@ -643,6 +643,14 @@ class Manager:
 
     def _matches_owned(self, item, current):
         user = self.home.stat()
+        if current is None and not item.get('old'):
+            # Proton or Steam rebuilt the prefix and took a file this
+            # transaction CREATED with it (no original ever existed there).
+            # An absent path cannot hold foreign bytes, and re-creating it is
+            # the same work the first enable did. If a third party later puts
+            # their own file at this path, current is not None and the sha
+            # comparison below still refuses to clobber it.
+            return bool(item.get('installed'))
         if (not current or current['sha256'] != item['installed_sha256'] or
                 current['mode'] != item['mode'] or current['uid'] != user.st_uid or
                 current['gid'] != user.st_gid):

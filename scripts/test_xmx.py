@@ -792,6 +792,38 @@ assert manager.recover_xmx('1817230', plan['plan_id'], '')['ok']
         self.assertTrue(result['ok'], result)
         return plan
 
+    def test_prefix_rebuild_removing_created_files_can_be_re_enabled_not_deadlocked(self):
+        enabled = self.enable()
+        driver_dir = self.system32/'driverstore/filerepository/igd_faux.inf_1'
+        driver = driver_dir/'igdext64.dll'
+        self.assertTrue(driver.is_file())
+        # Proton or Steam verifies/rebuilds the prefix and wipes our created tree.
+        import shutil as _shutil
+        _shutil.rmtree(self.system32/'driverstore')
+        (self.system32/'ControlLib.dll').unlink()
+        # Re-using the setup must not deadlock in an owned-file conflict...
+        plan = self.manager.plan_xmx('1817230', str(self.package),
+                                     enabled['desired_launch_options'], 'configure')
+        self.assertTrue(plan['ok'], plan)
+        result = self.manager.apply_xmx('1817230', plan['plan_id'])
+        self.assertTrue(result['ok'], result)
+        result = self.manager.finish_xmx('1817230', plan['plan_id'],
+                                         plan['desired_launch_options'])
+        self.assertTrue(result['ok'], result)
+        # ...and the files really come back.
+        self.assertTrue(driver.is_file())
+        self.assertTrue((self.system32/'ControlLib.dll').is_file())
+        self.assertTrue(self.manager.get_xmx_status('1817230')['installed'])
+
+    def test_third_party_file_at_created_path_still_blocks_configure(self):
+        enabled = self.enable()
+        driver = self.system32/'driverstore/filerepository/igd_faux.inf_1/igdext64.dll'
+        driver.write_bytes(b'someone else replaced our file')
+        plan = self.manager.plan_xmx('1817230', str(self.package),
+                                     enabled['desired_launch_options'], 'configure')
+        self.assertFalse(plan['ok'], plan)
+        self.assertIn('Owned file conflict', plan['error'])
+
     def test_disable_defers_removal_until_confirmation_then_restores_metadata(self):
         original = self.system32/'ControlLib.dll'
         original.write_bytes(b'original exact binary\0\xff')
