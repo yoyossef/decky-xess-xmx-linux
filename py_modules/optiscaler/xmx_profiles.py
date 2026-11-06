@@ -148,7 +148,7 @@ def render(manager, package, targets, profile, diagnostics):
                              ('; '+selected.get('reason', '') if selected else ''))
         library = Path(selected['path'])
     env = {'VK_DRIVER_FILES': targets[4],
-           'VKD3D_DISABLE_EXTENSIONS': 'VK_EXT_descriptor_buffer',
+           'VKD3D_DISABLE_EXTENSIONS': 'VK_EXT_descriptor_buffer,VK_KHR_present_wait2',
            'ANV_CM_KERNEL_DIR': package/'kernels',
            'ANV_CM_HELPER': package/'tools/cm-compile.sh', 'force_vk_vendor': '0'}
     if profile['driver'] != 'default':

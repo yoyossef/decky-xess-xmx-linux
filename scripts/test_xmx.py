@@ -705,6 +705,13 @@ assert manager.recover_xmx('1817230', plan['plan_id'], '')['ok']
         self.assertFalse(self.manager.apply_xmx('1817230', plan['plan_id'])['ok'])
         app = self.settings/'xess-xmx/apps/1817230'
         self.assertIn('ANV_CM_HELPER=', (app/'xess.conf').read_text())
+        # Upstream disables BOTH extensions: the kernel binding needs
+        # descriptor_buffer, and present_wait2 crashed games with frame
+        # generation (black title screens on Mesa 26.3/Jay included). The
+        # plugin once shipped only the first, silently deviating from upstream
+        # and from every working script around it.
+        self.assertIn('VK_EXT_descriptor_buffer,VK_KHR_present_wait2',
+                      (app/'xess.conf').read_text())
         self.assertIn('export XMX_CONF=', (app/'launch.sh').read_text())
         self.assertEqual(json.loads((app/'intel_icd.json').read_text())['ICD']['library_path'],
                          str(self.package/'lib/libvulkan_intel.so'))
