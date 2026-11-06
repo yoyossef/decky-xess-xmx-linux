@@ -5,7 +5,7 @@
  * `appmanifest_<id>.acf` names the folder under `steamapps/common`, and that
  * is the game. A shortcut added by hand has none of that. Steam stores the
  * command line and nothing else, so asking it where the game is installed gets
- * no answer, and the library context menu's **OptiScaler Settings** entry
+ * no answer, and the library context menu's **XeSS XMX Settings** entry
  * ended on "Steam did not report an install folder for this game" for every
  * one of them.
  *

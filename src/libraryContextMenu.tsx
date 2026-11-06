@@ -1,5 +1,5 @@
 /**
- * Adds an "OptiScaler Settings" entry to the context menu Steam shows for a
+ * Adds an "XeSS XMX Settings" entry to the context menu Steam shows for a
  * game — the same menu SteamGridDB puts "Change Artwork..." in.
  *
  * The structure here follows SteamGridDB's `contextMenuPatch`, which is the
@@ -29,10 +29,10 @@ import {
 import type { Patch } from "@decky/ui";
 import { openManager } from "./navigation";
 
-const MENU_LABEL = "OptiScaler Settings";
+const MENU_LABEL = "XeSS XMX Settings";
 /** Marks our injected node so repeated renders do not stack duplicates. */
-const MARKER = "decky-optiscaler-menu-item";
-const LOG = "[decky-optiscaler]";
+const MARKER = "decky-xess-xmx-menu-item";
+const LOG = "[decky-xess-xmx]";
 
 /** What the finder settled on, so the UI can say whether the entry exists. */
 export let menuPatchState: "patched" | "not-found" | "failed" | "idle" = "idle";
