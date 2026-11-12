@@ -16,6 +16,7 @@ async function renderPanel(props: { appid: string | null; running: boolean } = {
   return { host, root, cleanup: async () => { await act(async () => root.unmount()); host.remove(); } };
 }
 
+const XMX_PINNED = "v20261104";
 const statusFixture = {
   ok: true, installed: false, legacy: false, phase: "disabled", pending: null, runtime_verified: false,
   suggested_package: "", package: { valid: false, errors: ["Select an existing package"] },
@@ -24,7 +25,8 @@ const statusFixture = {
 Object.assign(fixtures, {
   get_pref: (key: string, fallback: unknown) => ({ key, value: fallback }),
   set_pref: { ok: true },
-  get_xmx_package_status: { ok: true, state: "idle", package: null, latest: null },
+  get_xmx_package_status: { ok: true, state: "idle", package: null, latest: null, pinned: XMX_PINNED },
+  check_xmx_package_upstream: { ok: true, available: false, latest_tag: null, pinned: XMX_PINNED, error: null },
   get_xmx_status: statusFixture,
   // Unknown/error DLL state must fail closed, so unrelated tests supply an
   // authoritative empty DLL journal rather than accidentally relying on it.
@@ -291,13 +293,13 @@ async function press(host: Element, text: string) {
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)); });
 }
 
-await test("first-visit hydration fills the native input and previews the detected package without typing", async () => {
+await test("explicit cached-package selection fills the native input and previews without typing", async () => {
   const preference = deferred<{ key: string; value: string }>();
   const status = deferred<unknown>();
   const requests: unknown[][] = [];
   const planned: unknown[][] = [];
   const saved: unknown[][] = [];
-  const previous = { get_pref: fixtures.get_pref, get_xmx_status: fixtures.get_xmx_status, plan_xmx: fixtures.plan_xmx, set_pref: fixtures.set_pref };
+  const previous = { get_pref: fixtures.get_pref, get_xmx_status: fixtures.get_xmx_status, plan_xmx: fixtures.plan_xmx, set_pref: fixtures.set_pref, get_xmx_package_status: fixtures.get_xmx_package_status };
   const steam = (globalThis as any).SteamClient;
   fixtures.get_pref = () => preference.promise;
   fixtures.get_xmx_status = (...args: unknown[]) => { requests.push(args); return status.promise; };
@@ -306,6 +308,8 @@ await test("first-visit hydration fills the native input and previews the detect
     return { ok: true, plan_id: "detected-plan", old_launch_options: args[2], desired_launch_options: "after %command%", operations: [] };
   };
   fixtures.set_pref = (...args: unknown[]) => { saved.push(args); return { ok: true }; };
+  fixtures.get_xmx_package_status = { ok: true, state: "ready", latest: null, pinned: XMX_PINNED,
+    package: { path: "/detected/actual package", tag: "next-1", archive_sha256: "a".repeat(64), runtime_verified: false } };
   (globalThis as any).SteamClient = { Apps: { GetAppLaunchOptions: async () => "before %command%" } };
   const before = rpcCalls.length;
   const p = await renderPanel();
@@ -320,13 +324,15 @@ await test("first-visit hydration fills the native input and previews the detect
     assert.equal(packageInput(p.host).disabled, true);
     await act(async () => status.resolve({ ...statusFixture, suggested_package: "/suggested/package", package: { path: "/detected/actual package", valid: true, errors: [] } }));
     assert.ok(Array.from(p.host.querySelectorAll("pre")).some(e => e.textContent === "/detected/actual package"), "diagnostics already display the detected path");
-    assert.equal(packageInput(p.host).value, "/detected/actual package", "displayed input must hydrate, not only its React prop");
+    assert.equal(packageInput(p.host).value, "", "cached diagnostics cannot silently select a fresh game's package");
+    await press(p.host, "Use for this game");
+    assert.equal(packageInput(p.host).value, "/detected/actual package", "explicit Use fills the actual native input");
     assert.equal(fieldProps(p.host, "Package folder").value, packageInput(p.host).value);
     const button = Array.from(p.host.querySelectorAll('[data-mock="ButtonItem"]')).find(e => e.textContent === "Enable XMX…")!;
     assert.equal(button.getAttribute("data-disabled"), null);
     await press(p.host, "Enable XMX…");
     assert.deepEqual(planned, [["42", "/detected/actual package", "before %command%", "enable"]]);
-    assert.deepEqual(saved, [["xmx_package_dir", "/detected/actual package"]]);
+    assert.deepEqual(saved.at(-1), ["xmx_package_dir", "/detected/actual package"]);
     assert.match(p.host.textContent ?? "", /Dry-run preview/);
     assert.equal(rpcCalls.slice(before).includes("apply_xmx"), false);
   } finally {
@@ -361,18 +367,18 @@ await test("first-visit hydration respects an asynchronously remembered package 
 });
 
 for (const suggested of ["/suggested/package", ""]) {
-  await test(`first-visit hydration ${suggested ? "uses the suggestion when diagnostic path is absent" : "keeps an undetected package blank and preview blocked"}`, async () => {
+  await test(`first-visit ${suggested ? "keeps a suggestion unselected" : "keeps an undetected package blank and preview blocked"}`, async () => {
     fixtures.get_pref = (key: string, fallback: unknown) => ({ key, value: fallback });
     fixtures.get_xmx_status = { ...statusFixture, suggested_package: suggested };
     const p = await renderPanel();
-    assert.deepEqual(buttonLabels(panelSection(p.host)), ["Update package", "Enable XMX…", "Refresh", "Details"]);
+    assert.deepEqual(buttonLabels(panelSection(p.host)), [`Download ${XMX_PINNED} (tested)`, "Enable XMX…", "Refresh", "Details"]);
     assert.match(panelSection(p.host).textContent ?? "", /Details.*Package folder.*Refresh/);
     assert.equal(p.host.querySelector('input[aria-label="Package folder"]'), null);
     await openDetails(p.host);
     try {
-      assert.equal(packageInput(p.host).value, suggested);
+      assert.equal(packageInput(p.host).value, "");
       assert.equal(fieldProps(p.host, "Package folder").value, packageInput(p.host).value);
-      assert.equal(Array.from(p.host.querySelectorAll('[data-mock="ButtonItem"]')).find(e => e.textContent === "Enable XMX…")?.getAttribute("data-disabled"), suggested ? null : "true");
+      assert.equal(Array.from(p.host.querySelectorAll('[data-mock="ButtonItem"]')).find(e => e.textContent === "Enable XMX…")?.getAttribute("data-disabled"), "true");
     } finally {
       await p.cleanup();
       fixtures.get_xmx_status = statusFixture;
@@ -764,8 +770,8 @@ await test("running prop disables every setup action and queued field edits", as
   assert.equal(buttonLabels(panelSection(p.host)).includes("Disable XMX…"), false, "no disable action without an installation");
   await press(p.host, "Refresh");
   assert.equal(rpcCalls.length, before);
-  assert.equal(Array.from(p.host.querySelectorAll('[data-mock="ButtonItem"]')).find(e => e.textContent === "Update package")?.getAttribute("data-disabled"), null, "package-only global preparation remains independent while playing");
-  assert.ok(Array.from(p.host.querySelectorAll('[data-mock="ButtonItem"]')).filter(e => !["Details", "Hide details", "Update package"].includes(e.textContent ?? "")).every(e => e.getAttribute("data-disabled") === "true"), "all game setup/inspection actions stay disabled; read-only expansion and independent preparation remain accessible");
+  assert.equal(Array.from(p.host.querySelectorAll('[data-mock="ButtonItem"]')).find(e => e.textContent === `Download ${XMX_PINNED} (tested)`)?.getAttribute("data-disabled"), null, "package-only global preparation remains independent while playing");
+  assert.ok(Array.from(p.host.querySelectorAll('[data-mock="ButtonItem"]')).filter(e => !["Details", "Hide details", `Download ${XMX_PINNED} (tested)`].includes(e.textContent ?? "")).every(e => e.getAttribute("data-disabled") === "true"), "all game setup/inspection actions stay disabled; read-only expansion and independent preparation remain accessible");
   await p.cleanup();
 });
 
@@ -2377,7 +2383,7 @@ await test("compact prefix defaults expose only settings and relevant preview ac
     const p = await renderPanel();
     try {
       const section = panelSection(p.host);
-      assert.deepEqual(buttonLabels(section), ["Update package", "Save settings…", "Disable XMX…", "Refresh", "Details"]);
+      assert.deepEqual(buttonLabels(section), [`Update to ${XMX_PINNED} (tested)`, "Save settings…", "Disable XMX…", "Refresh", "Details"]);
       for (const label of ["Driver", "Intel detection fix", "Debug logs"]) assert.ok(section.querySelector(`[aria-label="${label}"]`));
       assert.match(section.textContent ?? "", /Enabled.*configured/);
       assert.match(section.textContent ?? "", /Runtime unverified/);

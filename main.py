@@ -102,6 +102,9 @@ class Plugin:
     async def prepare_xmx_package(self) -> dict:
         return await self._xmx_rpc("prepare_xmx_package")
 
+    async def check_xmx_package_upstream(self) -> dict:
+        return await self._xmx_rpc("check_xmx_package_upstream")
+
     async def get_fsr_bridge_state(self) -> dict:
         return await self._xmx_rpc("get_fsr_bridge_state")
 

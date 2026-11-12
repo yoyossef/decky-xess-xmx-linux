@@ -1,6 +1,6 @@
 import { callable } from "@decky/api";
 import type { XmxAction, XmxApply, XmxPlan, XmxProfile, XmxResult } from "./xmx";
-import { isXmxProfile } from "./xmx";
+import { isXmxDriver, isXmxProfile } from "./xmx";
 export { isXmxProfile } from "./xmx";
 
 /** Kept separate from OptiScaler's APIs: no payload install or VDF fallback. */
@@ -31,7 +31,7 @@ export function isXmxStatus(value: unknown): value is XmxStatus {
     || status.runtime_verified !== false) return false;
   if (status.profile !== undefined && !isXmxProfile(status.profile)) return false;
   if (status.drivers !== undefined && (!Array.isArray(status.drivers) || status.drivers.some(d => !d
-    || !["default", "26.1", "26.3"].includes(d.id) || typeof d.label !== "string" || typeof d.valid !== "boolean"
+    || !isXmxDriver(d.id) || typeof d.label !== "string" || typeof d.valid !== "boolean"
     || (d.reason !== undefined && typeof d.reason !== "string")))) return false;
   const p = status.package;
   if (p !== undefined && (!p || typeof p !== "object" || Array.isArray(p)
@@ -135,6 +135,7 @@ export interface XmxPackageStatus {
   state: "idle" | "preparing" | "ready" | "error";
   package: XmxPreparedPackage | null;
   latest: { tag: string; archive_sha256: string } | null;
+  pinned: string;
   error?: string;
 }
 export function isXmxPackageStatus(value: unknown): value is XmxPackageStatus {
@@ -147,6 +148,8 @@ export function isXmxPackageStatus(value: unknown): value is XmxPackageStatus {
   const pkg = status.package;
   const latest = status.latest;
   return status.ok === true && ["idle", "preparing", "ready", "error"].includes(status.state ?? "")
+    // Mirrors the backend PINNED_TAG grammar: no free-form tag is accepted here.
+    && typeof status.pinned === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(status.pinned)
     && (status.error === undefined || typeof status.error === "string")
     && (pkg === null || Boolean(pkg && typeof pkg === "object" && !Array.isArray(pkg)
       && tag(pkg.tag) && hash(pkg.archive_sha256) && path(pkg.path) && pkg.runtime_verified === false))
@@ -155,7 +158,34 @@ export function isXmxPackageStatus(value: unknown): value is XmxPackageStatus {
     && (status.state !== "ready" || Boolean(pkg));
 }
 export const getXmxPackageStatus = callable<[], XmxPackageStatus | XmxResult>("get_xmx_package_status");
+/** Display-only tag of the release this plugin validates downloads against.
+ * The backend emits it even when the state record is malformed or busy, so
+ * button labels stay truthful while the strict validator keeps refusing the
+ * rest of an invalid receipt. Never use this to authorize an action. */
+export function packagePinnedTag(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const pinned = (value as { pinned?: unknown }).pinned;
+  // Same grammar as the strict validator (backend PINNED_TAG shape).
+  return typeof pinned === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(pinned) ? pinned : null;
+}
 export const prepareXmxPackage = callable<[], XmxPackageStatus | XmxResult>("prepare_xmx_package");
+export interface XmxUpstreamCheck {
+  ok: true;
+  available: boolean;
+  latest_tag: string | null;
+  pinned: string;
+  error: string | null;
+}
+export function isXmxUpstreamCheck(value: unknown): value is XmxUpstreamCheck {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const check = value as Partial<XmxUpstreamCheck>;
+  const tag = (v: unknown) => typeof v === "string" && v.trim().length > 0 && !/[\x00-\x1f\x7f]/.test(v);
+  return check.ok === true && typeof check.available === "boolean"
+    && (check.latest_tag === null || tag(check.latest_tag)) && tag(check.pinned)
+    && (check.error === null || typeof check.error === "string")
+    && (check.available === (check.latest_tag !== null));
+}
+export const checkXmxPackageUpstream = callable<[], XmxUpstreamCheck | XmxResult>("check_xmx_package_upstream");
 
 // ---- FSR->XeSS bridge (dedicated panel) ------------------------------------
 export interface FsrBridgeDetected {

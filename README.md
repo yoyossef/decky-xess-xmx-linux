@@ -30,14 +30,19 @@ manager parked behind an explicit button for the games XeSS XMX doesn't serve.
   3, Arc B390), Xe2 (user-validated on Arc B580), Xe-HPG (user-validated on Arc A310). Meteor
   Lake has no XMX units; other Intel GPUs are unverified, not assumed working.
 - Prefer a stable Proton version rather than Proton Experimental (can cause black screens rendering)
-- An internet connection for first-time setup: the plugin **fetches the latest
-  [xess-xmx-linux](https://github.com/HHHHanasak1/xess-xmx-linux) release from GitHub itself** —
-  the archive URL, size and SHA256 come from the release metadata and the download is verified
-  before it is unpacked into the plugin's own folder, along with its dependency set (Intel
-  compiler, Vulkan runtime, FidelityFX components) from pinned URLs. A **Update package** button
-  checks for newer upstream releases. Prefer it pre-downloaded? Point the plugin at your own
-  extracted package folder instead — same checksums, same validation. Nothing is ever applied
-  to a game until you preview and confirm that game's setup.
+- An internet connection for first-time setup: the plugin **downloads the upstream
+  [xess-xmx-linux](https://github.com/HHHHanasak1/xess-xmx-linux) release validated against this
+  plugin build** — the tag shown right on the **Download/Update package** button. The archive URL,
+  size and SHA256 are resolved live from the GitHub release metadata (never frozen in the plugin)
+  and the download is verified before it is unpacked into a new versioned folder in your home
+  directory. The Intel compiler, XeSS SDK and FidelityFX dependencies are resolved from the
+  official upstream helpers and release metadata at preparation time. Downloaded content is
+  hashed, and helpers run in an isolated, networkless workspace. Newer upstream releases are
+  **announced** on the Setup page as not-yet-validated, but never downloaded or forced; each
+  plugin update may raise the validated release. A manual extracted folder is optional under
+  Details and is badged as unvalidated; if it lacks dependencies, use Download package to
+  prepare a complete copy. Nothing is applied to a game until you preview and confirm that
+  game's setup.
 - Games on their **DX12 renderer** — XeSS/FSR is selected in each game's own graphics settings.
 
 ## Installing the plugin
@@ -58,12 +63,20 @@ manager parked behind an explicit button for the games XeSS XMX doesn't serve.
 
 1. Open the game in the plugin (Games tab, or **“XeSS XMX Settings”** in its library context
    menu).
-2. On **Setup**, let the XeSS XMX panel **prepare the package** — it downloads the latest
-   xess-xmx-linux release, verifies it against the release's SHA256, and unpacks it into the
-   plugin's own folder (the **Update package** button re-checks upstream later). Or point the
-   panel at your own extracted copy — same checksums, same validation.
+2. On **Setup**, choose **Download package** (the button shows the validated release tag) — it
+   downloads that xess-xmx-linux release, verifies the live release SHA256, extracts a new
+   versioned directory in your home, and prepares its dependencies. A pristine game's form
+   selects the result automatically; otherwise use **Use for this game**. A newer upstream
+   release is announced but never downloaded; switching existing game profiles stays explicit. You do not need to create or download a folder yourself. A complete manual
+   copy remains an optional choice under Details, with structural and access checks.
 3. Pick the Mesa variant for this game, review the **preview** — every file, every launch
    option, before it is written — and confirm.
+
+   Driver variants are discovered from the package rather than a fixed version list. The
+   existing dispatcher route remains the default; newer packages also offer **stock + XMX
+   layer** as an explicit Xe3-only choice. Downloading a newer release does not silently
+   migrate existing games to that route. D3D11/Vulkan features introduced upstream are not
+   runtime-validated by this plugin merely because the package contains them.
 4. Launch the game, select **XeSS** on its DX12 renderer. The first launch compiles the game's
    kernels once (a minute or two); after that they come from `~/.cache/xess-xmx`.
 5. Game without XeSS? Install the **FSR bridge** once from the Setup tab, then toggle the

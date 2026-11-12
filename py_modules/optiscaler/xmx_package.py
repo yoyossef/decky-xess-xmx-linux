@@ -83,6 +83,10 @@ def read_url(url, limit, *, cancel=None, deadline=None):
 
 REPO = 'HHHHanasak1/xess-xmx-linux'
 LATEST_URL = f'https://api.github.com/repos/{REPO}/releases/latest'
+# Release validated against this plugin build. prepare() downloads ONLY this
+# tag; bump it (plus tests + release) after validating a new upstream tag.
+PINNED_TAG = '20261111'
+PINNED_URL = f'https://api.github.com/repos/{REPO}/releases/tags/{PINNED_TAG}'
 MAX_ARCHIVE = 128 * 1024 * 1024
 
 
@@ -238,7 +242,7 @@ def _identity(value):
         raise ValueError('Invalid package release identity')
 
 
-def _state(manager):
+def _state(manager, *, allow_missing_package=False):
     try:
         state = _json_file(manager, manager.root/STATE_FILE)
     except FileNotFoundError:
@@ -248,6 +252,8 @@ def _state(manager):
         raise ValueError('Unrecognized package preparation ownership record; preserved')
     if state.get('latest') is not None:
         _identity(state['latest'])
+    if state.get('error') and (not isinstance(state['error'], str) or len(state['error']) > 2048):
+        raise ValueError('Invalid package preparation error record')
     package = state.get('package')
     if package is not None:
         if not isinstance(package, dict) or set(package) != {'tag', 'path', 'archive_sha256', 'runtime_verified'}:
@@ -259,9 +265,18 @@ def _state(manager):
         if (not path.is_absolute() or path.parent != manager.home
                 or not re.fullmatch(r'xess-xmx-linux-[A-Za-z0-9_.-]+', path.name)):
             raise ValueError('Prepared package escapes target HOME')
-        with manager._dirfd(path):
-            pass
-        receipt = _json_file(manager, path/RECEIPT)
+        try:
+            with manager._dirfd(path):
+                pass
+            receipt = _json_file(manager, path/RECEIPT, limit=65536)
+        except FileNotFoundError:
+            if not allow_missing_package:
+                raise
+            # Explicit preparation may replace its pointer to a missing
+            # directory/receipt, never repair or overwrite the old directory.
+            # The caller archives this already-schema-validated record first.
+            return {'ok': True, 'state': 'error', 'package': None,
+                    'latest': state.get('latest'), 'missing_package_record': state}
         if (receipt.get('provider') != PROVIDER or receipt.get('schema') != 1
                 or receipt.get('tag') != package['tag']
                 or receipt.get('archive_sha256') != package['archive_sha256']
@@ -270,10 +285,23 @@ def _state(manager):
             raise ValueError('Prepared package ownership receipt mismatch')
     result = {'ok': True, 'state': state['state'], 'package': package, 'latest': state.get('latest')}
     if state.get('error'):
-        if not isinstance(state['error'], str) or len(state['error']) > 2048:
-            raise ValueError('Invalid package preparation error record')
         result['error'] = state['error']
     return result
+
+
+def check_upstream(manager):
+    """Visibility only: is there an upstream release newer than the pin?
+
+    Never downloads, never mutates state; any failure degrades to unknown
+    so a GitHub outage cannot block the pinned Download."""
+    try:
+        release = select_release(json.loads(read_url(LATEST_URL, 1024*1024)))
+        newer = release['tag'] != PINNED_TAG
+        return {'ok': True, 'available': newer, 'latest_tag': release['tag'] if newer else None,
+                'pinned': PINNED_TAG, 'error': None}
+    except Exception as exc:
+        return {'ok': True, 'available': False, 'latest_tag': None, 'pinned': PINNED_TAG,
+                'error': str(exc)[:256]}
 
 
 def get_status(manager):
@@ -288,11 +316,13 @@ def get_status(manager):
                 try:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
-                    return state
-            return {**state, 'state': 'error', 'error': 'Previous package preparation was interrupted; previous package retained'}
-        return state
+                    return {**state, 'pinned': PINNED_TAG}
+            return {**state, 'pinned': PINNED_TAG, 'state': 'error',
+                    'error': 'Previous package preparation was interrupted; previous package retained'}
+        return {**state, 'pinned': PINNED_TAG}
     except Exception as exc:
-        return {'ok': True, 'state': 'error', 'package': None, 'latest': None, 'error': str(exc)[:2048]}
+        return {'ok': True, 'state': 'error', 'package': None, 'latest': None, 'pinned': PINNED_TAG,
+                'error': str(exc)[:2048]}
 
 
 def _save_state(manager, state):
@@ -458,19 +488,6 @@ def _elf_needed(path):
 _DEP_NAME = re.compile(r'lib(?:SPIRV-Tools[A-Za-z-]*|display-info)\.so[0-9.]*$')
 
 
-def _bundled_snapshot(manager, package):
-    original = {}
-    bundled = package/'lib/bundled'
-    if bundled.is_dir():
-        for path in bundled.iterdir():
-            if path.is_file():
-                with regular_file(path, authorize=manager._fd_access) as source:
-                    original['lib/bundled/'+path.name] = {
-                        'sha256': hashlib.file_digest(source, 'sha256').hexdigest(),
-                        'mode': stat.S_IMODE(os.fstat(source.fileno()).st_mode)}
-    return original
-
-
 def _populate_deps(*, manager, package, originals):
     """Stage packagable driver NEEDED deps that the host could not provide.
 
@@ -562,9 +579,7 @@ def _sandbox(manager, staging, command, cancel, deadline, *, allow_failure=False
              '--ro-bind', str(staging/'downloads'), '/downloads', '--chdir', '/work']
     args += list(extra_args)
     environment = {'HOME': '/work/home', 'TMPDIR': '/work/tmp', 'XDG_CACHE_HOME': '/work/cache',
-                   'PATH': '/work/bin:/usr/bin:/usr/sbin', 'LANG': 'C', 'LC_ALL': 'C',
-                   'IGC_TAG': 'v2.10.10', 'NEO_TAG': '25.18.33578.6', 'XESS_TAG': 'v3.0.2',
-                   'XESS_SHA256': '88b8a373f30e33f3558a77a93e634f11b8132fc3047ea1a8edeead32b8471990'}
+                   'PATH': '/work/bin:/usr/bin:/usr/sbin', 'LANG': 'C', 'LC_ALL': 'C'}
     if env:
         environment.update(env)
     for key, value in environment.items():
@@ -607,61 +622,44 @@ def _sandbox(manager, staging, command, cancel, deadline, *, allow_failure=False
         process.stdout.close()
 
 
-# Exact audited helper bytes, independent of the dynamically resolved package tag.
-# A changed helper fails closed until reviewed; the GitHub digest is not a signature.
-HELPER_SHA256 = {
-    'tools/get-igc.sh': '17feaa695dd442738c1ea8b15089532fb816ceed536dc770414c2b936bb59222',
-    'tools/get-xess.sh': '6e6fd385911d0cd00fe726bc42f81a6a6ab15461b1f5cbcffeaf9c1b2cf5189f',
-    'tools/get-ffx.sh': '369c918fe4d14a7d4cbe2a99258eba8af7ed7e92ceb536c849072d690ff431ed',
-    'tools/session-check.sh': '536414b9a089d8b48fb36db253256f2ef9d510c4ce1525f828ab26e1cebbbf70',
-}
-METADATA_URLS = (
-    'https://api.github.com/repos/intel/intel-graphics-compiler/releases/tags/v2.10.10',
-    'https://api.github.com/repos/intel/compute-runtime/releases/tags/25.18.33578.6',
-)
-_FFX_BASE = 'https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v2.4.0/Kits/FidelityFX/'
-DEPENDENCIES = (
-    ('https://github.com/intel/intel-graphics-compiler/releases/download/v2.10.10/intel-igc-core-2_2.10.10+18926_amd64.deb',
-     'ec3b8e6bb3d6371d3b9963c32ddb1d5315e6b0c3f4ae1d91a7515b5a8907ffe6'),
-    ('https://github.com/intel/compute-runtime/releases/download/25.18.33578.6/intel-ocloc_25.18.33578.6-0_amd64.deb',
-     'c772db8891539890237d50c357af1480b22cbd859c0b8afb5355f605a818d758'),
-    ('https://github.com/intel/xess/releases/download/v3.0.2/XeSS_SDK_3.0.2.zip',
-     '88b8a373f30e33f3558a77a93e634f11b8132fc3047ea1a8edeead32b8471990'),
-    (_FFX_BASE+'signedbin/amd_fidelityfx_loader_dx12.dll',
-     'e2191d3c0828be45eb8affd4e3ec0378f2293adc345b772a7170edcf3b021ecb'),
-    (_FFX_BASE+'signedbin/amd_fidelityfx_upscaler_dx12.dll',
-     'aad4fccccb29084a655f9a4f9f613bd22c8c03fb4a0f8840148cc6543b4ccace'),
-    (_FFX_BASE+'signedbin/amd_fidelityfx_framegeneration_dx12.dll',
-     'e6843252f58b0341a0d80f6a20bc0d840643ee95bc48c22cac08745344577bb6'),
-    (_FFX_BASE+'docs/license.md',
-     '32357259b965d6a8001e9e508ba60eda6034027c5923a7d226ffbaff813c2bfb'),
-)
-# This trusted adapter replays REAL fetched metadata and verified bytes, not
-# generated GitHub responses. Helpers have NO network, even localhost access.
-# Unknown URLs/options fail rather than downloading an unpinned dependency.
-# GitHub returns '+' inside asset paths percent-encoded ('%2B') while pinned
-# DEPENDENCIES stay raw; the path-only lookup key reconciles both forms.
-_CURL_REPLAY = '''#!/usr/bin/python3
+# Helpers are authenticated by the selected official archive's mandatory API
+# SHA256, not a separately shipped list of frozen script or dependency versions.
+_HELPERS = ('tools/get-igc.sh', 'tools/get-xess.sh', 'tools/get-ffx.sh', 'tools/session-check.sh')
+MAX_DEPENDENCY_DOWNLOADS = 48
+MAX_DEPENDENCY_BYTES = 384 * 1024 * 1024
+_DEPENDENCY_REPOS = {'intel/intel-graphics-compiler', 'intel/compute-runtime', 'intel/xess'}
+_RELEASE_TOKEN = r'[A-Za-z0-9][A-Za-z0-9_.+-]{0,127}'
+_REQUESTS = '.decky-download-requests.jsonl'
+
+# A missing URL is a discovery request, NOT permission for a helper to connect.
+# The host validates and fetches it, then retries the still-networkless helper.
+# Both the adapter directory and downloaded responses are bound read-only.
+_CURL_REPLAY = r'''#!/usr/bin/python3
 import json, pathlib, shutil, sys, urllib.parse
+
 def canonical(url):
     parts = urllib.parse.urlsplit(url)
     return urllib.parse.urlunsplit(parts._replace(path=urllib.parse.unquote(parts.path)))
 args = sys.argv[1:]
 index = json.loads(pathlib.Path('/downloads/index.json').read_text())
-def lookup(url):
-    return index.get(url) or index.get(canonical(url))
 if len(args) == 2 and args[0] == '-s':
-    name = lookup(args[1])
-    if name is None: sys.exit('Unpinned helper metadata URL')
-    sys.stdout.buffer.write((pathlib.Path('/downloads')/name).read_bytes())
+    url, output = args[1], None
 elif len(args) == 4 and args[:2] == ['-sfL', '-o']:
-    name = lookup(args[3])
-    if name is None: sys.exit('Unpinned helper dependency URL')
-    output = pathlib.Path(args[2]).resolve()
+    url, output = args[3], pathlib.Path(args[2]).resolve()
     if not output.is_relative_to('/work'): sys.exit('Helper output escapes fresh work')
-    shutil.copyfile(pathlib.Path('/downloads')/name, output)
 else:
-    sys.exit('Unreviewed helper curl invocation')
+    sys.exit('Unsupported helper curl invocation')
+if not url: sys.exit('Empty helper URL (metadata not yet available)')
+name = index.get(url) or index.get(canonical(url))
+if name is None:
+    with pathlib.Path('/work/.decky-download-requests.jsonl').open('a') as requests:
+        requests.write(json.dumps(url)+'\n')
+    sys.exit('Dependency requires official host-side verification')
+source = pathlib.Path('/downloads')/name
+if output is None:
+    sys.stdout.buffer.write(source.read_bytes())
+else:
+    shutil.copyfile(source, output)
 '''
 
 
@@ -670,19 +668,48 @@ def _canonical_lookup(url):
     return urllib.parse.urlunsplit(parts._replace(path=urllib.parse.unquote(parts.path)))
 
 
+def _dependency_source(url):
+    """Narrow origin AND path policy. Never authorize GitHub by hostname alone."""
+    if not isinstance(url, str) or len(url) > 2048 or any(ord(c) < 33 for c in url):
+        raise ValueError('Invalid official dependency URL')
+    parsed = urllib.parse.urlsplit(url)
+    path = urllib.parse.unquote(parsed.path)
+    if (parsed.scheme != 'https' or parsed.netloc != parsed.hostname
+            or parsed.query or parsed.fragment
+            or re.sub(r'%2[bB]', '+', parsed.path) != path
+            or any(p in ('.', '..', '') for p in path.split('/')[1:])):
+        raise ValueError('Invalid official dependency URL')
+    if parsed.hostname == 'api.github.com':
+        match = re.fullmatch(r'/repos/([^/]+/[^/]+)/releases/(?:tags/('+_RELEASE_TOKEN+r')|(latest))', path)
+        if match and match[1] in _DEPENDENCY_REPOS:
+            return {'kind': 'metadata', 'repo': match[1], 'tag': match[2]}
+    if parsed.hostname == 'github.com':
+        match = re.fullmatch(r'/([^/]+/[^/]+)/releases/download/('+_RELEASE_TOKEN+r')/('+_RELEASE_TOKEN+r')', path)
+        if match and match[1] in _DEPENDENCY_REPOS:
+            return {'kind': 'asset', 'repo': match[1], 'tag': match[2], 'name': match[3]}
+    if (parsed.hostname == 'raw.githubusercontent.com' and re.fullmatch(
+            r'/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}'
+            r'/Kits/FidelityFX/(?:signedbin/amd_fidelityfx_(?:loader|upscaler|framegeneration)_dx12\.dll|docs/license\.md)',
+            parsed.path)):
+        return {'kind': 'content'}
+    raise ValueError('Unsupported official dependency origin/path')
+
 
 def _prepare_dependencies(manager, staging, cancel, deadline, originals=None):
     package = staging/'work/package'
-    for name, expected in HELPER_SHA256.items():
+    helpers = {}
+    for name in _HELPERS:
         with regular_file(package/name, authorize=manager._fd_access) as source:
-            if hashlib.file_digest(source, 'sha256').hexdigest() != expected:
-                raise ValueError('Unreviewed package helper bytes: '+name)
+            data = source.read(1024*1024+1)
+        actual = hashlib.sha256(data).hexdigest()
+        if (originals is None or name not in originals or len(data) > 1024*1024
+                or actual != originals[name]['sha256']):
+            raise ValueError('Package helper differs from verified archive: '+name)
+        helpers[name] = actual
     for executable in ('bwrap', 'bash', 'ar', 'tar', 'zstd', 'python3', 'sha256sum'):
         if not shutil.which(executable, path='/usr/bin:/bin:/usr/sbin:/sbin'):
             raise RuntimeError('Missing package preparation prerequisite: '+executable)
     downloads = staging/'downloads'
-    # The staging directory is already exclusively owned by this operation.
-    # Tests can provide an empty downloads directory; never reuse its contents.
     with manager._dirfd(downloads.parent):
         pass
     if not downloads.exists():
@@ -690,46 +717,117 @@ def _prepare_dependencies(manager, staging, cancel, deadline, originals=None):
     with manager._dirfd(downloads):
         if any(downloads.iterdir()):
             raise ValueError('Dependency download workspace is not fresh')
-    _populate_deps(manager=manager, package=package,
-                   originals=originals if originals is not None else _bundled_snapshot(manager, package))
+    _populate_deps(manager=manager, package=package, originals=originals)
     _sandbox(manager, staging, ['/usr/bin/true'], cancel, deadline)
-    index, total, count = {}, 0, 0
-    for url, expected in [*((url, None) for url in METADATA_URLS), *DEPENDENCIES]:
+    manager._mkdir(downloads/'bin')
+    manager._atomic(downloads/'bin/curl', _CURL_REPLAY.encode(), mode=0o755, expected=None)
+    manager._mkdir(staging/'work/bin')
+    index, metadata_cache, receipts, total = {}, {}, [], 0
+
+    def fetch(url):
+        nonlocal total
         _check_cancel(cancel, deadline)
-        data = read_url(url, 1024*1024 if expected is None else MAX_ARCHIVE,
+        source = _dependency_source(url)
+        if _canonical_lookup(url) in index:
+            return
+        expected, declared = None, None
+        verification = 'official-https-content'
+        if source['kind'] == 'asset':
+            metadata_url = f"https://api.github.com/repos/{source['repo']}/releases/tags/{source['tag']}"
+            fetch(metadata_url)
+            metadata = metadata_cache[_canonical_lookup(metadata_url)]
+            matches = [a for a in metadata['assets'] if isinstance(a, dict)
+                       and a.get('name') == source['name']]
+            if len(matches) != 1:
+                raise ValueError('Dependency asset is absent or ambiguous in official release metadata')
+            asset = matches[0]
+            if (_canonical_lookup(asset.get('browser_download_url', '')) != _canonical_lookup(url)
+                    or type(asset.get('size')) is not int or not 0 < asset['size'] <= MAX_ARCHIVE):
+                raise ValueError('Dependency asset URL/size differs from official release metadata')
+            digest = asset.get('digest')
+            if digest is None and source['repo'] in {'intel/intel-graphics-compiler', 'intel/compute-runtime'}:
+                # Older Intel assets predate GitHub's digest field. The same
+                # official HTTPS release API publishes exact filename checksums.
+                body = metadata.get('body', '')
+                sums = [match[1] for line in body.splitlines()
+                        if (match := re.fullmatch(r'\s*([0-9a-f]{64})[ \t]+\*?'+re.escape(source['name'])+r'[ \t]*', line))] if isinstance(body, str) else []
+                if len(sums) != 1:
+                    raise ValueError('Official dependency release requires one exact filename SHA256')
+                expected, verification = sums[0], 'github-release-body-sha256'
+            elif isinstance(digest, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', digest):
+                expected, verification = digest[7:], 'github-api-sha256'
+            else:
+                raise ValueError('Official dependency asset requires a SHA256 digest')
+            declared = asset['size']
+        if len(receipts) >= MAX_DEPENDENCY_DOWNLOADS:
+            raise ValueError('Dependency download count exceeds budget')
+        data = read_url(url, 1024*1024 if source['kind'] == 'metadata' else MAX_ARCHIVE,
                         cancel=cancel, deadline=deadline)
         total += len(data)
-        if total > 384*1024*1024:
+        if total > MAX_DEPENDENCY_BYTES:
             raise ValueError('Dependency downloads exceed aggregate byte budget')
-        if expected is not None and hashlib.sha256(data).hexdigest() != expected:
-            raise ValueError('Pinned dependency SHA256 mismatch: '+url.rsplit('/', 1)[-1])
-        if expected is None:
+        actual = hashlib.sha256(data).hexdigest()
+        if expected is not None and (actual != expected or len(data) != declared):
+            raise ValueError('Official dependency SHA256/size mismatch')
+        receipts.append({'url': url, 'size': len(data), 'sha256': actual, 'verification': verification})
+        if source['kind'] == 'metadata':
             metadata = json.loads(data)
-            if not isinstance(metadata, dict) or not isinstance(metadata.get('assets'), list):
-                raise ValueError('Invalid dependency release metadata')
-            # The audited helpers parse metadata line-by-line (grep|cut); the
-            # REST API may answer minified single-line JSON. Store the exact
-            # parsed content re-indented so each field sits on its own line.
+            if (not isinstance(metadata, dict) or metadata.get('draft') is not False
+                    or metadata.get('prerelease') is not False
+                    or not isinstance(metadata.get('tag_name'), str)
+                    or not re.fullmatch(_RELEASE_TOKEN, metadata['tag_name'])
+                    or source['tag'] is not None and metadata['tag_name'] != source['tag']
+                    or not isinstance(metadata.get('assets'), list) or len(metadata['assets']) > 256):
+                raise ValueError('Invalid official dependency release metadata')
+            metadata_cache[_canonical_lookup(url)] = metadata
+            # Preserve content; helpers use grep/cut expecting one field per line.
             data = json.dumps(metadata, indent=2).encode()
-        filename = 'download-'+str(count)
-        count += 1
+        filename = 'download-'+str(len(receipts)-1)
         manager._atomic(downloads/filename, data, mode=0o644, expected=None)
-        index[url] = filename
-        # Helpers see GitHub's encoded asset URLs; index the path-decoded key too.
-        encoded_key = _canonical_lookup(url)
-        if encoded_key != url:
-            index.setdefault(encoded_key, filename)
-    manager._atomic(downloads/'index.json', json.dumps(index).encode(), mode=0o644, expected=None)
-    manager._mkdir(staging/'work/bin')
-    manager._atomic(staging/'work/bin/curl', _CURL_REPLAY.encode(), mode=0o755, expected=None)
-    for name in ('tools/get-igc.sh', 'tools/get-xess.sh', 'tools/get-ffx.sh'):
-        _sandbox(manager, staging, ['/usr/bin/bash', '/work/package/'+name, '/work/package'], cancel, deadline)
-    # Without GPU devices this is only dependency population. Exit 1 from the
-    # dry-run native probe is expected; all deps and Manager checks must still
-    # pass before publication. No systemctl/environment fallback is reachable.
-    _sandbox(manager, staging, ['/usr/bin/bash', '/work/package/tools/session-check.sh', '--dry-run'],
-             cancel, deadline, allow_failure=True,
-             env={'LD_LIBRARY_PATH': '/work/package/lib/deps'})
+        index[url] = index[_canonical_lookup(url)] = filename
+
+    extra = ('--ro-bind', str(downloads/'bin'), '/work/bin')
+    request_path = staging/'work'/_REQUESTS
+    for name in _HELPERS:
+        for attempt in range(MAX_DEPENDENCY_DOWNLOADS+1):
+            _check_cancel(cancel, deadline)
+            with regular_file(package/name, authorize=manager._fd_access) as source:
+                if hashlib.file_digest(source, 'sha256').hexdigest() != helpers[name]:
+                    raise ValueError('Package helper changed during preparation: '+name)
+            manager._atomic(downloads/'index.json', json.dumps(index).encode(), mode=0o644,
+                            expected=snapshot(downloads/'index.json'))
+            with manager._dirfd(request_path.parent) as work:
+                try:
+                    os.unlink(request_path.name, dir_fd=work)
+                except FileNotFoundError:
+                    pass
+            failure = None
+            try:
+                _sandbox(manager, staging, ['/usr/bin/bash', '/work/package/'+name,
+                         '--dry-run' if name == _HELPERS[-1] else '/work/package'], cancel, deadline,
+                         allow_failure=name == _HELPERS[-1], extra_args=extra,
+                         env={'LD_LIBRARY_PATH': '/work/package/lib/deps'})
+            except RuntimeError as exc:
+                if not str(exc).startswith('Isolated preparation failed:'):
+                    raise  # A sandbox output/disk/resource guard is not discovery.
+                failure = exc
+            try:
+                with regular_file(request_path, authorize=manager._fd_access) as source:
+                    requests = source.read(65537)
+            except FileNotFoundError:
+                requests = b''
+            if len(requests) > 65536:
+                raise ValueError('Dependency request log exceeds budget')
+            urls = list(dict.fromkeys(json.loads(line) for line in requests.splitlines()))
+            if not urls:
+                if failure:
+                    raise failure
+                break
+            for url in urls:
+                fetch(url)
+        else:
+            raise ValueError('Dependency discovery retry budget exceeded')
+    return {'helpers': helpers, 'downloads': receipts}
 
 
 def prepare(manager, *, cancel=None):
@@ -741,13 +839,20 @@ def prepare(manager, *, cancel=None):
     try:
         _guard(manager, write=True)
         with manager._lock():
-            state = _state(manager)
+            state = _state(manager, allow_missing_package=True)
+            missing = state.pop('missing_package_record', None)
+            if missing is not None:
+                history = manager.root/'package-preparation-history'
+                manager._mkdir(history)
+                manager._atomic(history/(uuid.uuid4().hex+'.json'),
+                                json.dumps(missing, sort_keys=True).encode(),
+                                mode=0o600, expected=None)
             state = {k: v for k, v in state.items() if k != 'error'}
             try:
                 state['state'] = 'preparing'
                 _save_state(manager, state)
                 _check_cancel(cancel, deadline)
-                release = select_release(json.loads(read_url(LATEST_URL, 1024*1024, cancel=cancel, deadline=deadline)))
+                release = select_release(json.loads(read_url(PINNED_URL, 1024*1024, cancel=cancel, deadline=deadline)))
                 state['latest'] = {k: release[k] for k in ('tag', 'archive_sha256')}
                 _save_state(manager, state)
                 stage = manager.home/('.decky-xmx-stage-'+uuid.uuid4().hex)
@@ -758,13 +863,14 @@ def prepare(manager, *, cancel=None):
                 data = read_url(release['url'], MAX_ARCHIVE, cancel=cancel, deadline=deadline)
                 originals = extract_archive(manager, data, release, stage/'work/package', cancel=cancel, deadline=deadline)
                 manager._mkdir(stage/'work/package/kernels')
-                _prepare_dependencies(manager, stage, cancel, deadline, originals=originals)
+                preparation = _prepare_dependencies(manager, stage, cancel, deadline, originals=originals)
                 _check_cancel(cancel, deadline)
                 package = stage/'work/package'
                 _validate(manager, package, originals)
                 target = manager.home/(f"xess-xmx-linux-{release['tag']}-{release['archive_sha256'][:12]}-"+uuid.uuid4().hex[:12])
                 receipt = {'provider': PROVIDER, 'schema': 1, 'path': str(target),
                            **state['latest'], 'runtime_verified': False,
+                           'preparation': preparation,
                            'tree_sha256': manager._source_hash(package)}
                 manager._atomic(package/RECEIPT, json.dumps(receipt, sort_keys=True).encode(), mode=0o644, expected=None)
                 with manager._dirfd(package.parent) as source, manager._dirfd(manager.home) as home:
@@ -776,7 +882,7 @@ def prepare(manager, *, cancel=None):
                 with manager._dirfd(target):
                     pass
                 _validate(manager, target, originals)
-                if _json_file(manager, target/RECEIPT) != receipt:
+                if _json_file(manager, target/RECEIPT, limit=65536) != receipt:
                     raise ValueError('Published package ownership readback mismatch')
                 state['package'] = {**state['latest'], 'path': str(target), 'runtime_verified': False}
                 state['state'] = 'ready'
@@ -794,9 +900,9 @@ def prepare(manager, *, cancel=None):
                         if actual and (actual.st_dev, actual.st_ino) == (stage_identity.st_dev, stage_identity.st_ino):
                             shutil.rmtree(stage.name, dir_fd=home)
                             os.fsync(home)
-            return state
+            return {**state, 'pinned': PINNED_TAG}
     except BlockingIOError:
         return get_status(manager)
     except Exception as exc:
-        return {**state, 'state': 'error', 'error': str(exc)[:2048]}
+        return {**state, 'pinned': PINNED_TAG, 'state': 'error', 'error': str(exc)[:2048]}
 

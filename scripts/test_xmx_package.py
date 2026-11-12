@@ -35,8 +35,57 @@ class PackageTests(unittest.TestCase):
     def test_status_is_local_only_and_does_not_create_state(self):
         with patch('urllib.request.OpenerDirector.open', side_effect=AssertionError('network')):
             self.assertEqual(self.pkg.get_status(self.manager), {
-                'ok': True, 'state': 'idle', 'package': None, 'latest': None})
+                'ok': True, 'state': 'idle', 'package': None, 'latest': None,
+                'pinned': self.pkg.PINNED_TAG})
         self.assertFalse(self.manager.root.exists())
+
+    def test_prepare_downloads_the_pinned_tag_release_and_ignores_latest(self):
+        pinned_data = self.package_archive(self.pkg.PINNED_TAG)
+        newer = self.release(tag='20991231', data=b'totally newer release')
+        seen = []
+        def network(url, limit, **kwargs):
+            seen.append(url)
+            if url == self.pkg.LATEST_URL:
+                return json.dumps(newer).encode()
+            if url.endswith('/releases/tags/'+self.pkg.PINNED_TAG):
+                return json.dumps(self.release(tag=self.pkg.PINNED_TAG, data=pinned_data)).encode()
+            return pinned_data
+        with patch.object(self.pkg, 'read_url', side_effect=network), patch.object(
+                self.pkg, '_prepare_dependencies', side_effect=self.fake_dependencies):
+            result = self.pkg.prepare(self.manager)
+        self.assertEqual(result['state'], 'ready', result)
+        self.assertEqual(result['package']['tag'], self.pkg.PINNED_TAG)
+        self.assertIn('-'+self.pkg.PINNED_TAG+'-', Path(result['package']['path']).name)
+        self.assertEqual(result['pinned'], self.pkg.PINNED_TAG)
+        self.assertNotIn(self.pkg.LATEST_URL, seen)
+
+
+    def test_check_upstream_reports_newer_unvalidated_tag_without_download(self):
+        seen = []
+        def network(url, limit, **kwargs):
+            seen.append(url)
+            return json.dumps(self.release(tag='20991231')).encode()
+        with patch.object(self.pkg, 'read_url', side_effect=network):
+            result = self.pkg.check_upstream(self.manager)
+        self.assertEqual(result, {'ok': True, 'available': True, 'latest_tag': '20991231',
+                                  'pinned': self.pkg.PINNED_TAG, 'error': None})
+        self.assertEqual(seen, [self.pkg.LATEST_URL])
+
+    def test_check_upstream_equal_tag_is_not_newer(self):
+        with patch.object(self.pkg, 'read_url',
+                          return_value=json.dumps(self.release(tag=self.pkg.PINNED_TAG)).encode()):
+            result = self.pkg.check_upstream(self.manager)
+        self.assertTrue(result['ok'])
+        self.assertFalse(result['available'])
+        self.assertIsNone(result['error'])
+
+    def test_check_upstream_network_failure_degrades_to_unknown(self):
+        with patch.object(self.pkg, 'read_url', side_effect=OSError('network down')):
+            result = self.pkg.check_upstream(self.manager)
+        self.assertTrue(result['ok'])
+        self.assertFalse(result['available'])
+        self.assertIsNone(result['latest_tag'])
+        self.assertIn('network down', result['error'])
 
     def test_latest_selects_the_exact_zip_and_requires_api_digest(self):
         release = self.release()
@@ -141,7 +190,7 @@ class PackageTests(unittest.TestCase):
         self.assertFalse((self.home/'extracted').exists())
 
 
-    def package_archive(self):
+    def package_archive(self, tag='next-1'):
         import stat, zipfile
         from test_xmx import pe64, elf64
         files = {'igdext64.dll': pe64(), 'ControlLib.dll': pe64(),
@@ -152,7 +201,7 @@ class PackageTests(unittest.TestCase):
         output = io.BytesIO()
         with zipfile.ZipFile(output, 'w') as archive:
             for name, data in files.items():
-                info = zipfile.ZipInfo('xess-xmx-linux-next-1/'+name)
+                info = zipfile.ZipInfo(f'xess-xmx-linux-{tag}/'+name)
                 info.external_attr = (stat.S_IFREG | (0o755 if name.endswith('.sh') else 0o644)) << 16
                 archive.writestr(info, data)
         return output.getvalue()
@@ -169,11 +218,12 @@ class PackageTests(unittest.TestCase):
                          'ffx/amd_fidelityfx_loader_dx12.dll', 'ffx/amd_fidelityfx_upscaler_dx12.dll',
                          'ffx/amd_fidelityfx_framegeneration_dx12.dll'):
             path = package/relative; path.parent.mkdir(exist_ok=True); path.write_bytes(pe64())
+        return {'helpers': {}, 'downloads': []}
 
     def prepare_fixture(self, dependencies=None):
         data = self.package_archive()
         def network(url, limit, **kwargs):
-            return json.dumps(self.release(data=data)).encode() if url == self.pkg.LATEST_URL else data
+            return json.dumps(self.release(data=data)).encode() if url in (self.pkg.LATEST_URL, self.pkg.PINNED_URL) else data
         with patch.object(self.pkg, 'read_url', side_effect=network), patch.object(
                 self.pkg, '_prepare_dependencies', side_effect=dependencies or self.fake_dependencies):
             return self.pkg.prepare(self.manager)
@@ -192,14 +242,52 @@ class PackageTests(unittest.TestCase):
         self.assertEqual((foreign/'keep').read_text(), 'foreign')
         self.assertEqual(self.pkg.get_status(self.manager), result)
         self.assertFalse(list(self.home.glob('.decky-xmx-stage-*')))
-        self.assertEqual(json.loads((target/self.pkg.RECEIPT).read_text())['provider'], self.pkg.PROVIDER)
+        receipt = json.loads((target/self.pkg.RECEIPT).read_text())
+        self.assertEqual(receipt['provider'], self.pkg.PROVIDER)
+        self.assertEqual(receipt['preparation'], {'helpers': {}, 'downloads': []})
+
+    def test_explicit_prepare_recovers_missing_old_package_or_receipt_and_preserves_evidence(self):
+        for missing in ('directory', 'receipt'):
+            with self.subTest(missing=missing):
+                ready = self.prepare_fixture()
+                self.assertEqual(ready['state'], 'ready', ready)
+                old = Path(ready['package']['path'])
+                original_record = json.loads((self.manager.root/self.pkg.STATE_FILE).read_text())
+                if missing == 'directory':
+                    shutil.rmtree(old)
+                else:
+                    (old/self.pkg.RECEIPT).unlink()
+                    (old/'untouched').write_text('do not replace or delete')
+                recovered = self.prepare_fixture()
+                self.assertEqual(recovered['state'], 'ready', recovered)
+                self.assertNotEqual(recovered['package']['path'], str(old))
+                history = list((self.manager.root/'package-preparation-history').glob('*.json'))
+                self.assertTrue(any(json.loads(p.read_text()) == original_record for p in history))
+                if missing == 'receipt':
+                    self.assertEqual((old/'untouched').read_text(), 'do not replace or delete')
+                    self.assertFalse((old/self.pkg.RECEIPT).exists())
+
+    def test_missing_package_does_not_bypass_malformed_ownership_state(self):
+        ready = self.prepare_fixture()
+        old = Path(ready['package']['path'])
+        shutil.rmtree(old)
+        path = self.manager.root/self.pkg.STATE_FILE
+        record = json.loads(path.read_text())
+        record['error'] = ['invalid error type']
+        path.write_text(json.dumps(record))
+        with patch.object(self.pkg, 'read_url') as network:
+            refused = self.pkg.prepare(self.manager)
+        network.assert_not_called()
+        self.assertEqual(refused['state'], 'error')
+        self.assertIn('error record', refused['error'])
+        self.assertEqual(json.loads(path.read_text()), record)
 
     def test_failed_or_interrupted_prepare_retains_previous_ready_and_cleans_only_own_staging(self):
         ready = self.prepare_fixture()
         self.assertEqual(ready['state'], 'ready', ready)
         sentinel = self.home/'.decky-xmx-stage-foreign'; sentinel.mkdir(); (sentinel/'keep').write_text('foreign')
         for failure in (RuntimeError('partial dependency failure'), InterruptedError('cancelled')):
-            def fail(*args):
+            def fail(*args, **kwargs):
                 self.fake_dependencies(*args)
                 raise failure
             failed = self.prepare_fixture(fail)
@@ -210,13 +298,13 @@ class PackageTests(unittest.TestCase):
         self.assertEqual((sentinel/'keep').read_text(), 'foreign')
 
     def test_prepare_rejects_mutated_originals_and_symlink_escape_after_helpers(self):
-        def changed(*args):
+        def changed(*args, **kwargs):
             self.fake_dependencies(*args)
             (args[1]/'work/package/igdext64.dll').write_bytes(b'changed')
         result = self.prepare_fixture(changed)
         self.assertEqual(result['state'], 'error', result)
         self.assertIn('original', result['error'].lower())
-        def escaped(*args):
+        def escaped(*args, **kwargs):
             self.fake_dependencies(*args)
             (args[1]/'work/package/escape').symlink_to(self.home)
         result = self.prepare_fixture(escaped)
@@ -300,43 +388,88 @@ class PackageTests(unittest.TestCase):
             (package/name).write_text(script); hashes[name] = hashlib.sha256(script.encode()).hexdigest()
         return hashes, url
 
-    def test_dependencies_are_pinned_then_replayed_offline_to_pinned_helpers(self):
+    def helper_originals(self, stage):
+        return {str(path.relative_to(stage/'work/package')): {
+            'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+            'mode': path.stat().st_mode & 0o777}
+            for path in (stage/'work/package/tools').iterdir()}
+
+    def test_verified_archive_helpers_discover_new_raw_dependency_and_record_provenance(self):
         import time
-        stage = self.sandbox_stage(); hashes, url = self.dependency_helpers(stage)
+        stage = self.sandbox_stage(); self.dependency_helpers(stage)
+        url = ('https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/'
+               'v99.8.7/Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll')
+        helper = stage/'work/package/tools/get-igc.sh'
+        helper.write_text('#!/bin/bash\nset -eu\ncurl -sfL -o "$1/replayed" '+url+'\n')
+        originals = self.helper_originals(stage)
         payload = b'bounded official dependency fixture'
-        with patch.object(self.pkg, 'HELPER_SHA256', hashes), patch.object(self.pkg, 'METADATA_URLS', ()), patch.object(
-                self.pkg, 'DEPENDENCIES', ((url, hashlib.sha256(payload).hexdigest()),)), patch.object(
-                self.pkg, 'read_url', return_value=payload) as network:
-            self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20)
+        with patch.object(self.pkg, 'read_url', return_value=payload) as network:
+            receipt = self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20,
+                                                     originals=originals)
         self.assertEqual((stage/'work/package/replayed').read_bytes(), payload)
         self.assertTrue((stage/'work/cache/test').is_dir())
         self.assertEqual(network.call_args.args[0], url)
         self.assertFalse((self.home/'.cache').exists())
+        self.assertEqual(receipt['helpers']['tools/get-igc.sh'], originals['tools/get-igc.sh']['sha256'])
+        self.assertEqual(receipt['downloads'], [{'url': url, 'size': len(payload),
+            'sha256': hashlib.sha256(payload).hexdigest(), 'verification': 'official-https-content'}])
 
-    def test_replay_matches_percent_encoded_asset_urls_to_raw_pinned_dependency(self):
-        # GitHub release metadata returns '+' in asset paths as '%2B' while the
-        # pinned DEPENDENCIES entry is the raw '+' URL; the offline replay must
-        # resolve the encoded helper URL to the pinned bytes.
+    def dependency_release_fixture(self, stage, payload=b'new SDK bytes', repo='intel/xess', tag='v99.9'):
+        self.dependency_helpers(stage)
+        asset_url = f'https://github.com/{repo}/releases/download/{tag}/SDK+99.zip'
+        metadata_url = f'https://api.github.com/repos/{repo}/releases/tags/{tag}'
+        metadata = {'tag_name': tag, 'draft': False, 'prerelease': False, 'assets': [{
+            'name': 'SDK+99.zip', 'browser_download_url': asset_url.replace('+', '%2B'),
+            'size': len(payload), 'digest': 'sha256:'+hashlib.sha256(payload).hexdigest()}]}
+        helper = ('#!/bin/bash\nset -eu\n'
+                  'u=$(curl -s '+metadata_url+' | grep browser_download_url | cut -d\\" -f4)\n'
+                  'curl -sfL -o "$1/replayed" "$u"\n')
+        (stage/'work/package/tools/get-igc.sh').write_text(helper)
+        return metadata_url, asset_url, metadata
+
+    def test_dynamic_api_digest_verifies_encoded_asset_and_pretty_metadata_replay(self):
         import time
-        stage = self.sandbox_stage()
-        package = stage/'work/package'; (package/'tools').mkdir(parents=True)
-        raw = ('https://github.com/intel/intel-graphics-compiler/releases/download/'
-               'v2.10.10/intel-igc-core-2_2.10.10+18926_amd64.deb')
-        encoded = raw.replace('+', '%2B')
-        self.assertNotEqual(raw, encoded)
-        scripts = {'tools/get-igc.sh': '#!/bin/bash\nset -eu\ncurl -sfL -o "$1/replayed" '+encoded+'\n',
-                   'tools/get-xess.sh': '#!/bin/bash\nset -eu\ntest -s "$1/replayed"\n',
-                   'tools/get-ffx.sh': '#!/bin/bash\nset -eu\ntest -s "$1/replayed"\n',
-                   'tools/session-check.sh': '#!/bin/bash\nset -eu\nexit 1\n'}
-        hashes = {}
-        for name, script in scripts.items():
-            (package/name).write_text(script); hashes[name] = hashlib.sha256(script.encode()).hexdigest()
-        payload = b'pinned igc-core fixture'
-        with patch.object(self.pkg, 'HELPER_SHA256', hashes), patch.object(self.pkg, 'METADATA_URLS', ()), patch.object(
-                self.pkg, 'DEPENDENCIES', ((raw, hashlib.sha256(payload).hexdigest()),)), patch.object(
-                self.pkg, 'read_url', return_value=payload):
-            self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20)
-        self.assertEqual((package/'replayed').read_bytes(), payload)
+        stage = self.sandbox_stage(); payload = b'new SDK bytes'
+        metadata_url, url, metadata = self.dependency_release_fixture(stage, payload)
+        originals = self.helper_originals(stage)
+        def network(request, limit, **kwargs):
+            return json.dumps(metadata).encode() if request == metadata_url else payload
+        with patch.object(self.pkg, 'read_url', side_effect=network) as network_call:
+            receipt = self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20,
+                                                     originals=originals)
+        self.assertEqual((stage/'work/package/replayed').read_bytes(), payload)
+        self.assertEqual(len(network_call.call_args_list), 2)
+        asset = receipt['downloads'][-1]
+        self.assertEqual(asset['verification'], 'github-api-sha256')
+        self.assertEqual(asset['sha256'], hashlib.sha256(payload).hexdigest())
+        index = json.loads((stage/'downloads/index.json').read_text())
+        self.assertEqual(index[url], index[url.replace('+', '%2B')])
+        stored = (stage/'downloads'/index[metadata_url]).read_text()
+        self.assertIn('\n      "browser_download_url": "', stored)
+        self.assertEqual(json.loads(stored), metadata)
+
+    def test_encoded_plus_release_tags_share_metadata_cache_in_both_request_orders(self):
+        import time
+        for encoded_first in (True, False):
+            with self.subTest(encoded_first=encoded_first):
+                stage = self.sandbox_stage()
+                payload = b'new SDK bytes'
+                metadata_url, url, metadata = self.dependency_release_fixture(stage, payload, tag='v99+build')
+                encoded = metadata_url.replace('+', '%2B')
+                first, second = (encoded, metadata_url) if encoded_first else (metadata_url, encoded)
+                helper = ('#!/bin/bash\nset -eu\n'
+                          'curl -s '+first+' > /work/metadata-first\n'
+                          'curl -s '+second+' > /work/metadata-second\n'
+                          'curl -sfL -o "$1/replayed" '+url+'\n')
+                (stage/'work/package/tools/get-igc.sh').write_text(helper)
+                def network(request, limit, **kwargs):
+                    return json.dumps(metadata).encode() if '/releases/tags/' in request else payload
+                with patch.object(self.pkg, 'read_url', side_effect=network) as calls:
+                    self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20,
+                                                   originals=self.helper_originals(stage))
+                self.assertEqual((stage/'work/package/replayed').read_bytes(), payload)
+                self.assertEqual(calls.call_count, 2)
+                shutil.rmtree(stage)
 
     def test_canonical_lookup_key_decodes_only_the_path_and_stays_injective(self):
         canonical = self.pkg._canonical_lookup
@@ -349,48 +482,60 @@ class PackageTests(unittest.TestCase):
                          'https://api.github.com/repos/a/b?sig=%2Bx%2Fy')
         self.assertEqual(canonical('https://github.com/a/%zz'), 'https://github.com/a/%zz')
 
-    def test_metadata_is_pretty_printed_so_line_parsers_extract_exact_urls(self):
-        # GitHub's REST API now answers minified single-line JSON; the audited
-        # helpers parse metadata with grep|cut per line. The stored bytes must
-        # be pretty-printed and every '"browser_download_url": "<x>"' line must
-        # cut out to an exact top-level asset URL, including '+' assets.
+    def test_legacy_intel_asset_without_api_digest_uses_official_release_body_sha256(self):
         import time
-        stage = self.sandbox_stage()
-        package = stage/'work/package'; (package/'tools').mkdir(parents=True)
-        raw = ('https://github.com/intel/intel-graphics-compiler/releases/download/'
-               'v2.10.10/intel-igc-core-2_2.10.10+18926_amd64.deb')
-        asset = {'name': 'intel-igc-core-2_2.10.10+18926_amd64.deb', 'browser_download_url': raw}
-        metadata = json.dumps({'url': 'https://api.github.com/repos/intel/intel-graphics-compiler/releases/217542229',
-                               'html_url': 'https://github.com/intel/intel-graphics-compiler/releases/tag/v2.10.10',
-                               'tag_name': 'v2.10.10', 'name': 'IGC 2.10.10', 'draft': False, 'prerelease': False,
-                               'assets': [asset, dict(asset, name='intel-igc-core-2_2.10.10+18926_arm64.deb',
-                                                      browser_download_url=raw.replace('amd64', 'arm64'))]})
-        metadata_url = 'https://api.github.com/repos/intel/intel-graphics-compiler/releases/tags/v2.10.10'
-        helper = ('#!/bin/bash\nset -eu\n'
-                  'curl -s '+metadata_url+' | grep browser_download_url | cut -d\\" -f4 > "$1/cuturls"\n'
-                  'cmp /work/package/metadata-check.expected "$1/cuturls"\n')
-        scripts = {'tools/get-igc.sh': helper,
-                   'tools/get-xess.sh': '#!/bin/bash\nset -eu\n',
-                   'tools/get-ffx.sh': '#!/bin/bash\nset -eu\n',
-                   'tools/session-check.sh': '#!/bin/bash\nset -eu\nexit 1\n'}
-        hashes = {}
-        for name, script in scripts.items():
-            (package/name).write_text(script); hashes[name] = hashlib.sha256(script.encode()).hexdigest()
-        payload = b'deb-fixture'
+        stage = self.sandbox_stage(); payload = b'legacy compiler release'
+        metadata_url, url, metadata = self.dependency_release_fixture(
+            stage, payload, repo='intel/compute-runtime', tag='31.22.777')
+        metadata['assets'][0]['digest'] = None
+        metadata['body'] = 'Official package checksums:\n```\n'+hashlib.sha256(payload).hexdigest()+'  SDK+99.zip\n```'
+        def network(request, limit, **kwargs):
+            return json.dumps(metadata).encode() if request == metadata_url else payload
+        with patch.object(self.pkg, 'read_url', side_effect=network):
+            receipt = self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20,
+                                                     originals=self.helper_originals(stage))
+        self.assertEqual((stage/'work/package/replayed').read_bytes(), payload)
+        self.assertEqual(receipt['downloads'][-1]['verification'], 'github-release-body-sha256')
 
-        def network(url, limit, **kwargs):
-            return metadata.encode() if url == metadata_url else payload
-        with patch.object(self.pkg, 'HELPER_SHA256', hashes), patch.object(
-                self.pkg, 'METADATA_URLS', (metadata_url,)), patch.object(
-                self.pkg, 'DEPENDENCIES', ((raw, hashlib.sha256(payload).hexdigest()),)), patch.object(
-                self.pkg, 'read_url', side_effect=network):
-            (package/'metadata-check.expected').write_text(raw+'\n'+raw.replace('amd64', 'arm64')+'\n')
-            self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20)
-        index = json.loads((stage/'downloads'/'index.json').read_text())
-        stored = (stage/'downloads'/index[metadata_url]).read_text()
-        self.assertIn('\n      "browser_download_url": "', stored)
-        self.assertEqual(stored.count('"browser_download_url": "'), 2)
-        self.assertGreater(stored.count('\n'), 10)
+    def test_dependency_origin_policy_rejects_untrusted_paths_and_encoded_escapes(self):
+        base = 'https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/'
+        urls = [
+            'http://github.com/intel/xess/releases/download/v1/sdk.zip',
+            'https://github.com/attacker/xess/releases/download/v1/sdk.zip',
+            'https://api.github.com/repos/intel/xess/issues/1',
+            'https://api.github.com/repos/intel/xess/releases/tags/v1?token=leak',
+            'https://api.github.com@evil.test/repos/intel/xess/releases/latest',
+            'https://github.com/intel/xess/releases/download/v1/sdk.zip#fragment',
+            'https://github.com/intel/xess/releases/download/v1/%2Fescape.zip',
+            'https://github.com/intel/xess/releases/download/v1/%252Fescape.zip',
+            'https://github.com/intel/xess/releases/download/v1/../sdk.zip',
+            base+'v1/Kits/FidelityFX/signedbin/arbitrary.exe',
+            base+'v1/Kits/FidelityFX/docs/../../escape',
+            base+'v1/Kits/FidelityFX/docs/license.md?auth=leak',
+            'https://127.0.0.1/local', 'file:///etc/passwd', 'not-a-url', None,
+        ]
+        for url in urls:
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                self.pkg._dependency_source(url)
+
+    def test_helper_request_for_untrusted_origin_never_reaches_host_network(self):
+        import time
+        stage = self.sandbox_stage(); self.dependency_helpers(stage)
+        (stage/'work/package/tools/get-igc.sh').write_text(
+            '#!/bin/bash\nset -eu\ncurl -sfL -o "$1/replayed" https://github.com/attacker/repo/releases/download/v1/a.zip\n')
+        with patch.object(self.pkg, 'read_url') as network, self.assertRaisesRegex(ValueError, 'origin'):
+            self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20,
+                                           originals=self.helper_originals(stage))
+        network.assert_not_called()
+        self.assertFalse((stage/'work/package/replayed').exists())
+
+    def test_legacy_prepared_receipts_without_download_provenance_still_read(self):
+        ready = self.prepare_fixture()
+        self.assertEqual(ready['state'], 'ready', ready)
+        receipt_path = Path(ready['package']['path'])/self.pkg.RECEIPT
+        receipt = json.loads(receipt_path.read_text()); receipt.pop('preparation')
+        receipt_path.write_text(json.dumps(receipt))
+        self.assertEqual(self.pkg.get_status(self.manager), ready)
 
     def test_session_check_step_exposes_package_dependency_dirs_on_ld_library_path(self):
         # The dry-run native probe dlopens the patched Mesa driver; its NEEDED
@@ -417,10 +562,10 @@ class PackageTests(unittest.TestCase):
         hashes = {}
         for name, script in scripts.items():
             (package/name).write_text(script); hashes[name] = hashlib.sha256(script.encode()).hexdigest()
-        with patch.object(self.pkg, 'HELPER_SHA256', hashes), patch.object(self.pkg, 'METADATA_URLS', ()), patch.object(
-                self.pkg, 'DEPENDENCIES', ()), patch.object(self.pkg, 'read_url') as network:
-            network.assert_not_called()
-            self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+30)
+        with patch.object(self.pkg, 'read_url') as network:
+            self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+30,
+                                           originals=self.helper_originals(stage))
+        network.assert_not_called()
         self.assertTrue((stage/'work/cache/test').is_dir())
 
     def _shared_object(self, name, needed=None):
@@ -494,18 +639,86 @@ class PackageTests(unittest.TestCase):
         self.assertIn('lib/deps/'+name, staged)
         self.assertEqual((package/'lib/deps'/name).read_bytes(), dep.read_bytes())
 
-    def test_dependency_hash_or_helper_change_fails_before_execution(self):
+    def test_dependency_digest_mismatch_stops_before_replay_and_changed_helper_before_execution(self):
         import time
-        stage = self.sandbox_stage(); hashes, url = self.dependency_helpers(stage)
-        with patch.object(self.pkg, 'HELPER_SHA256', hashes), patch.object(self.pkg, 'METADATA_URLS', ()), patch.object(
-                self.pkg, 'DEPENDENCIES', ((url, '0'*64),)), patch.object(self.pkg, 'read_url', return_value=b'wrong'):
+        stage = self.sandbox_stage()
+        metadata_url, url, metadata = self.dependency_release_fixture(stage)
+        originals = self.helper_originals(stage)
+        def network(request, limit, **kwargs):
+            return json.dumps(metadata).encode() if request == metadata_url else b'wrong'
+        with patch.object(self.pkg, 'read_url', side_effect=network):
             with self.assertRaisesRegex(ValueError, 'SHA256'):
-                self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20)
+                self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20,
+                                               originals=originals)
         self.assertFalse((stage/'work/package/replayed').exists())
-        (stage/'work/package/tools/get-igc.sh').write_text('# unreviewed')
-        with patch.object(self.pkg, 'HELPER_SHA256', hashes), patch.object(self.pkg, 'read_url') as network:
+        (stage/'work/package/tools/get-igc.sh').write_text('# changed after archive verification')
+        with patch.object(self.pkg, 'read_url') as network, patch.object(self.pkg, '_sandbox') as sandbox:
             with self.assertRaisesRegex(ValueError, 'helper'):
-                self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20)
+                self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20,
+                                               originals=originals)
+        network.assert_not_called(); sandbox.assert_not_called()
+
+    def test_dependency_asset_without_authoritative_checksum_is_never_fetched(self):
+        import time
+        for bad in ('missing', 'malformed', 'duplicate', 'wrong-size', 'wrong-tag'):
+            with self.subTest(bad=bad):
+                stage = self.sandbox_stage()
+                metadata_url, url, metadata = self.dependency_release_fixture(stage)
+                if bad == 'missing': metadata['assets'][0]['digest'] = None
+                if bad == 'malformed': metadata['assets'][0]['digest'] = 'sha256:abc'
+                if bad == 'duplicate': metadata['assets'] *= 2
+                if bad == 'wrong-size': metadata['assets'][0]['size'] = True
+                if bad == 'wrong-tag': metadata['tag_name'] = 'v100.1'
+                (stage/'work/package/tools/get-igc.sh').write_text(
+                    '#!/bin/bash\nset -eu\ncurl -sfL -o "$1/replayed" '+url+'\n')
+                with patch.object(self.pkg, 'read_url', return_value=json.dumps(metadata).encode()) as network:
+                    with self.assertRaises(ValueError):
+                        self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20,
+                                                       originals=self.helper_originals(stage))
+                self.assertEqual([call.args[0] for call in network.call_args_list], [metadata_url])
+                self.assertFalse((stage/'work/package/replayed').exists())
+                shutil.rmtree(stage)
+
+    def test_discovery_preserves_download_count_and_aggregate_byte_budgets(self):
+        import time
+        for guard, limit in [('MAX_DEPENDENCY_DOWNLOADS', 0), ('MAX_DEPENDENCY_BYTES', 3)]:
+            with self.subTest(guard=guard):
+                stage = self.sandbox_stage(); self.dependency_helpers(stage)
+                url = ('https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/'
+                       'v77/Kits/FidelityFX/docs/license.md')
+                (stage/'work/package/tools/get-igc.sh').write_text(
+                    '#!/bin/bash\nset -eu\ncurl -sfL -o "$1/replayed" '+url+'\n')
+                with patch.object(self.pkg, guard, limit), patch.object(self.pkg, 'read_url', return_value=b'license') as network:
+                    with self.assertRaisesRegex(ValueError, 'budget'):
+                        self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20,
+                                                       originals=self.helper_originals(stage))
+                self.assertEqual(network.call_count, 0 if guard == 'MAX_DEPENDENCY_DOWNLOADS' else 1)
+                self.assertFalse((stage/'work/package/replayed').exists())
+                shutil.rmtree(stage)
+
+    def test_replay_adapter_is_readonly_inside_helper_sandbox(self):
+        import time
+        stage = self.sandbox_stage(); self.dependency_helpers(stage)
+        (stage/'work/package/tools/get-igc.sh').write_text(
+            '#!/bin/bash\nset -eu\nprintf tamper > /work/bin/curl\n')
+        with patch.object(self.pkg, 'read_url') as network:
+            with self.assertRaisesRegex(RuntimeError, 'Read-only file system'):
+                self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20,
+                                               originals=self.helper_originals(stage))
+        network.assert_not_called()
+        self.assertEqual((stage/'downloads/bin/curl').read_text(), self.pkg._CURL_REPLAY)
+
+    def test_output_budget_failure_is_not_reclassified_as_a_dependency_discovery_request(self):
+        import time
+        stage = self.sandbox_stage(); self.dependency_helpers(stage)
+        url = ('https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/'
+               'v77/Kits/FidelityFX/docs/license.md')
+        (stage/'work/package/tools/get-igc.sh').write_text(
+            '#!/bin/bash\ncurl -s '+url+'\npython3 -c \'print("x"*300000)\'\n')
+        with patch.object(self.pkg, 'read_url', return_value=b'license') as network:
+            with self.assertRaisesRegex(RuntimeError, 'output'):
+                self.pkg._prepare_dependencies(self.manager, stage, None, time.monotonic()+20,
+                                               originals=self.helper_originals(stage))
         network.assert_not_called()
 
     def test_internal_dependency_symlinks_are_allowed_but_world_writable_files_are_not(self):

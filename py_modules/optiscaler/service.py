@@ -486,6 +486,12 @@ class OptiScalerService:
         from . import xmx_package
         return await self._xmx_call(xmx_package.get_status, self.xmx)
 
+    async def check_xmx_package_upstream(self):
+        """Read-only upstream visibility: is a newer unvalidated release out?
+        Never downloads; failures degrade to 'unknown'."""
+        from . import xmx_package
+        return await self._xmx_call(xmx_package.check_upstream, self.xmx)
+
     async def get_fsr_bridge_state(self):
         """FSR->XeSS bridge state: package, hooks, parked session file, units."""
         from . import xmx_bridge
