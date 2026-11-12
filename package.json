@@ -1,6 +1,6 @@
 {
   "name": "decky-optiscaler",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "XeSS on Intel XMX for Steam Deck/ROG Ally: native-XeSS games, an FSR-to-XeSS bridge, and OptiScaler management, per game from the Decky UI",
   "type": "module",
   "scripts": {
