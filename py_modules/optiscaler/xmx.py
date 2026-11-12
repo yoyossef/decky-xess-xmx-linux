@@ -554,6 +554,10 @@ class Manager:
             if not diagnostics['valid']:
                 raise ValueError('; '.join(diagnostics['errors']))
             package = Path(diagnostics['path'])
+            if action == 'adopt_trial' and not any(
+                    item['id'] == trial_profile['driver'] and item['valid']
+                    for item in xmx_profiles.drivers(self, package, diagnostics)):
+                raise ValueError('Trial Mesa driver unavailable in this package')
             targets = self._targets(appid, prefix)
             wrapper = ('#!/bin/sh\nexport XMX_CONF='+shlex.quote(str(targets[3]))+
                        '\nexec '+shlex.quote(str(package/'xmx-launch.sh'))+' "$@"\n')
@@ -889,6 +893,13 @@ class Manager:
             self._source_hash(package, hash_files=False)
             result['compiler_validated'] = True
             result['valid'] = True
+        except FileNotFoundError as exc:
+            missing = Path(package_dir)
+            result['errors'].append(
+                'Package not downloaded. Choose Download package to fetch and extract the official release.'
+                if not missing.exists() else
+                'Package is incomplete: '+str(exc.filename or 'required file')+
+                '. Choose Download package to prepare the release and its dependencies.')
         except (OSError, ValueError, struct.error) as exc:
             result['errors'].append(str(exc))
         return result
@@ -1782,15 +1793,25 @@ class Manager:
                                      'pending_adopt_trial', 'pending_nuke'):
             phase = 'recovery_required'
         recorded_package = (journal or installed or {}).get('package_dir')
-        package = Path(package_dir or recorded_package or self.home/'xess-xmx-linux')
+        suggested = str(self.home/'xess-xmx-linux')
+        if not package_dir and not recorded_package:
+            # The package pipeline publishes versioned directories, not a
+            # fixed ~/xess-xmx-linux. Reuse its local receipt, with no network
+            # access or game activation from a status read.
+            from . import xmx_package
+            prepared = xmx_package.get_status(self)
+            if prepared.get('package'):
+                suggested = prepared['package']['path']
+        package = Path(package_dir or recorded_package or suggested)
+        diagnostics = self._package(package)
         return {'ok': True, 'installed': bool(installed), 'legacy': bool(self._legacy(appid)), 'phase': phase,
                 'state_corrupt': bool(corrupt),
                 'corruption_reasons': corrupt,
-                'runtime_verified': False, 'suggested_package': str(self.home/'xess-xmx-linux'),
-                'package': self._package(package),
+                'runtime_verified': False, 'suggested_package': str(package),
+                'package': diagnostics,
                 'profile': xmx_profiles.normalize((installed or {}).get('profile')),
                 'drivers': [{k: v for k, v in item.items() if k != 'path'} for item in
-                            xmx_profiles.drivers(self, package, self._package(package))],
+                            xmx_profiles.drivers(self, package, diagnostics)],
                 'gpu': self._gpu(), 'native_xess': self._native_xess(appid),
                 'flatpak': {'visible': None, 'runtime_verified': False,
                             'reason': 'Sandbox visibility has not been verified as the target user.'},

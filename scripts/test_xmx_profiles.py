@@ -65,6 +65,95 @@ class ProfileTests(unittest.TestCase):
         path.write_bytes(elf64()+version.encode())
         return path
 
+    def test_new_mesa_family_is_discovered_without_plugin_version_update(self):
+        self.variant('27.2.1')
+        status = self.manager.get_xmx_status('1817230', str(self.package))
+        driver = next((d for d in status['drivers'] if d['id'] == '27.2'), None)
+        self.assertIsNotNone(driver, status)
+        self.assertTrue(driver['valid'], driver)
+        plan = self.manager.plan_xmx('1817230', str(self.package), '%command%',
+                                     profile={**DEFAULT, 'driver': '27.2'})
+        self.assertTrue(plan['ok'], plan)
+        # The public preview must report the requested semantic profile.
+        self.assertEqual(plan['profile']['driver'], '27.2')
+
+    def test_stock_driver_requires_and_exports_the_packaged_vulkan_layer(self):
+        self.variant('stock-26.3.0')
+        selected = {**DEFAULT, 'driver': 'stock-26.3'}
+        refused = self.manager.plan_xmx('1817230', str(self.package), '%command%', profile=selected)
+        self.assertFalse(refused['ok'], refused)
+        layer = self.package/'layer'
+        layer.mkdir()
+        (layer/'libVkLayer_xess_xmx.so').write_bytes(elf64())
+        (layer/'VkLayer_xess_xmx.json').write_text(json.dumps({'file_format_version': '1.2.0', 'layer': {
+            'name': 'VK_LAYER_XESS_xmx', 'type': 'GLOBAL', 'library_path': './libVkLayer_xess_xmx.so',
+            'api_version': '1.3.0', 'implementation_version': 1, 'description': 'XeSS XMX'}}))
+        plan = self.manager.plan_xmx('1817230', str(self.package), '%command%', profile=selected)
+        self.assertTrue(plan['ok'], plan)
+        self.assertTrue(self.manager.apply_xmx('1817230', plan['plan_id'])['ok'])
+        conf = (self.manager._app('1817230')/'xess.conf').read_text()
+        self.assertIn('export VK_LOADER_LAYERS_ENABLE=VK_LAYER_XESS_xmx', conf)
+        self.assertIn('export VK_ADD_LAYER_PATH='+str(layer), conf)
+        self.assertIn('export XMX_IGC_DIR='+str(self.package/'igc'), conf)
+        self.assertIn('export XMX_LAYER_HELPER='+str(self.package/'tools/cm-compile.sh'), conf)
+        self.assertIn('export MESA=stock-26.3', conf)
+
+    def test_default_dispatcher_pointing_to_stock_also_enables_layer(self):
+        from optiscaler import xmx_profiles as P
+        stock = self.variant('stock-26.3.0')
+        (self.package/'lib/active').unlink()
+        (self.package/'lib/active').write_text('stock-26.3.0')
+        layer = self.package/'layer'
+        layer.mkdir()
+        (layer/'libVkLayer_xess_xmx.so').write_bytes(elf64())
+        (layer/'VkLayer_xess_xmx.json').write_text(json.dumps({'layer': {
+            'name': 'VK_LAYER_XESS_xmx', 'library_path': 'libVkLayer_xess_xmx.so'}}))
+        diagnostics = self.manager._package(self.package)
+        self.assertEqual(diagnostics['selected_driver'], str(stock))
+        targets = self.manager._targets('1817230', self.prefix)
+        config, _ = P.render(self.manager, self.package, targets, DEFAULT, diagnostics)
+        self.assertIn('export VK_LOADER_LAYERS_ENABLE=VK_LAYER_XESS_xmx', config)
+
+    def test_stock_config_preserves_inherited_layer_search_and_default_search(self):
+        import subprocess
+        from optiscaler import xmx_profiles as P
+        self.variant('stock-26.3.0')
+        layer = self.package/'layer'
+        layer.mkdir()
+        (layer/'libVkLayer_xess_xmx.so').write_bytes(elf64())
+        (layer/'VkLayer_xess_xmx.json').write_text(json.dumps({'layer': {
+            'name': 'VK_LAYER_XESS_xmx', 'library_path': './libVkLayer_xess_xmx.so'}}))
+        targets = self.manager._targets('1817230', self.prefix)
+        config, _ = P.render(self.manager, self.package, targets,
+                             {**DEFAULT, 'driver': 'stock-26.3'}, self.manager._package(self.package))
+        probe = config+'printf "%s\\n" "${VK_LAYER_PATH-unset}"'
+        inherited = subprocess.check_output(['/bin/sh', '-c', probe],
+                    env={'VK_LAYER_PATH': '/custom/layer one:/custom/layer-two'}, text=True).strip()
+        self.assertEqual(inherited, str(layer)+':/custom/layer one:/custom/layer-two')
+        default = subprocess.check_output(['/bin/sh', '-c', probe], env={}, text=True).strip()
+        self.assertEqual(default, 'unset')
+        exported_empty = subprocess.check_output(['/bin/sh', '-c', probe],
+                         env={'VK_LAYER_PATH': ''}, text=True).strip()
+        self.assertEqual(exported_empty, 'unset', 'empty override must not suppress the additional XMX layer')
+
+    def test_stock_layer_manifest_cannot_redirect_library_outside_package(self):
+        from optiscaler import xmx_profiles as P
+        layer = self.package/'layer'
+        layer.mkdir()
+        (layer/'libVkLayer_xess_xmx.so').write_bytes(elf64())
+        manifest = layer/'VkLayer_xess_xmx.json'
+        for value in ({'layer': []}, [], {'layer': {'name': 'VK_LAYER_XESS_xmx',
+                  'library_path': '../outside.so'}}):
+            manifest.write_text(json.dumps(value))
+            with self.assertRaises(ValueError):
+                P.layer_env(self.manager, self.package)
+
+    def test_driver_identifiers_never_allow_paths_or_shell(self):
+        from optiscaler import xmx_profiles as P
+        for value in ('../27.0', '27.0;id', 'stock-../27.0', '', 'x27.0', None):
+            with self.assertRaises(ValueError, msg=str(value)):
+                P.normalize({**DEFAULT, 'driver': value})
+
     def test_profile_owner_commit_death_abort_restores_exact_legacy_owner(self):
         self.variant()
         original = self.system32/'ControlLib.dll'

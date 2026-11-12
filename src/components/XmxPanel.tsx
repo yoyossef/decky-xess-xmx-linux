@@ -22,6 +22,7 @@ function XmxPanelSession({ appid, running }: Props) {
   const [status, setStatus] = useState<XmxStatus | null>(null);
   const statusRef = useRef<XmxStatus | null>(null);
   const [packageDir, setPackageDir] = useState("");
+  const packageChosen = useRef(false);
   const [profile, setProfile] = useState<XmxProfile>({ driver: "default", discovery: "auto", diagnostics: false, fg: 0, bridge: 0, sdk_latest: false });
   const profileEdited = useRef(false);
   const [loading, setLoading] = useState(true);
@@ -113,7 +114,10 @@ function XmxPanelSession({ appid, running }: Props) {
         setStatus(statusRef.current);
         if (isXmxStatus(value)) {
           if (!profileEdited.current && value.profile) setProfile({ ...value.profile, fg: value.profile.fg ?? 0, bridge: value.profile.bridge ?? 0, sdk_latest: value.profile.sdk_latest ?? false });
-          if (initializePackage && !dir.trim()) {
+          // Installed ownership may restore its recorded package. A disabled
+          // game's status can resolve to a cached receipt; that is diagnostics,
+          // not consent to select it (Use or explicit fresh preparation owns that).
+          if (initializePackage && !dir.trim() && value.installed) {
             const detected = value.package?.path || value.suggested_package;
             if (typeof detected === "string" && detected.trim()) setPackageDir(detected);
           }
@@ -146,6 +150,7 @@ function XmxPanelSession({ appid, running }: Props) {
     if (appid) void getPref(PACKAGE_PREF, "").then(pref => {
       if (!mounted.current) return;
       const dir = typeof pref?.value === "string" ? pref.value : "";
+      packageChosen.current = Boolean(dir.trim());
       setPackageDir(dir);
       void refresh(dir, false, null, true);
     }).catch(exc => {
@@ -264,6 +269,7 @@ function XmxPanelSession({ appid, running }: Props) {
     if (sourceEpoch !== renderEpoch.current) { console.warn("[xess-xmx] package callback came from an outdated render"); setGuardWarning("Package action came from an outdated view — use the current panel."); return; }
     if (inspect && !canSelectPackage()) return;
     setGuardWarning(null);
+    packageChosen.current = true;
     setPackageDir(dir);
     statusRef.current = statusRef.current ? { ...statusRef.current, package: undefined, flatpak: undefined } : null;
     setStatus(statusRef.current);
@@ -274,6 +280,16 @@ function XmxPanelSession({ appid, running }: Props) {
     dllInterlock.clearPreview?.();
     setTransaction({ ...controller.state });
     if (inspect) void refresh(dir, true);
+  };
+  const selectFreshPackage = (dir: string) => {
+    const value = statusRef.current;
+    // Only an explicit successful preparation may fill a pristine disabled
+    // form. Remembered paths, deliberate clears/edits, existing installs,
+    // previews and all live transaction/running guards retain their authority.
+    if (packageChosen.current || profileEdited.current || !canSelectPackage() || !value
+      || value.installed || value.phase !== "disabled" || value.pending !== null || controller.state.preview
+      || !(value.package?.valid === false || !liveForm.current.packageDir.trim())) return;
+    editPackage(dir, true);
   };
   const readLogs = async () => {
     if (!appid || !mounted.current || loadingRef.current || operationRef.current || scope.current.owner || runningRef.current) return;
@@ -306,8 +322,7 @@ function XmxPanelSession({ appid, running }: Props) {
       <PanelSectionRow>
         <div>{status?.legacy ? "Legacy unmanaged installation — changes blocked. Use the original installer to remove it; this manager will not adopt or migrate it." : status?.ok ? (status.installed ? "Enabled (configured)" : "Not installed") : `Installation status unavailable${status?.error ? `: ${status.error}` : ""} — Refresh to retry, or use the Danger zone below to clear whatever is left.`}</div>
         <div>Runtime unverified — configured does not mean the game is using XMX.</div>
-        {!packageDir.trim() ? <div role="alert">Choose an existing package in Details → Package folder, then Refresh.</div>
-          : status?.package?.valid === false ? <div role="alert">Package needs attention. Check Details → Package folder, then Refresh.</div> : null}
+        {!packageDir.trim() || status?.package?.valid === false ? <div role="alert">{!packageDir.trim() ? "No package selected." : "Selected package is missing or invalid."} Download package to download and extract it automatically. An existing package can also be selected in Details → Package folder, then Refresh.</div> : null}
         {status?.package?.errors?.map((message, index) => <div role="alert" key={index}>{message}</div>)}
         {status?.flatpak?.visible === false ? <div role="alert">{status.flatpak.reason || "Package is not visible to Steam."} Check Details → Flatpak visibility and Steam sandbox access, then Refresh.</div> : null}
         {running ? <div>Stop this game before making changes.</div> : null}
@@ -317,7 +332,8 @@ function XmxPanelSession({ appid, running }: Props) {
         {logsError ? <div role="alert">{logsError}</div> : null}
         {transaction.success ? <div>Launch options verified. Transaction completed; runtime remains unverified.</div> : null}
       </PanelSectionRow>
-      <XmxPackagePanel currentPath={packageDir} selectionDisabled={!canSelectPackage()} onSelect={dir => editPackage(dir, true, epoch)} />
+      <XmxPackagePanel currentPath={packageDir} needsPackage={!packageDir.trim() || status?.package?.valid === false}
+        selectionDisabled={!canSelectPackage()} onSelect={dir => editPackage(dir, true, epoch)} onPrepared={selectFreshPackage} />
       <PanelSectionRow>
         <DropdownItem key={`${profile.driver}:${drivers.map(driver => driver.id + driver.label).join("|")}`}
           label="Driver" selectedOption={profile.driver}
@@ -391,7 +407,7 @@ function XmxPanelSession({ appid, running }: Props) {
           <TextField label="Package folder" value={packageDir}
             disabled={loading || transaction.busy || running || needsRecovery || editingBlocked}
             onChange={e => editPackage(e.target.value)} />
-          <div>Independent of OptiScaler. Prefix support requires native XeSS and an existing package. Game DLL changes are separate.</div>
+          <div>Independent of OptiScaler. Download package prepares the extracted files; no manual home folder is needed. Prefix support requires native XeSS. Game DLL changes are separate.</div>
           <div>GPU static readiness: {status?.gpu?.xmx_capable === true ? "v1-validated device" : status?.gpu?.xmx_capable === false ? "unverified or unsupported device" : "not checked"}</div>
           {status?.gpu?.reason ? <div>{status.gpu.reason}</div> : null}
           <div>Native XeSS candidate: {status?.native_xess?.found === true ? "DLL detected (not compatibility proof)" : status?.native_xess?.found === false ? "not detected" : "not checked"}</div>

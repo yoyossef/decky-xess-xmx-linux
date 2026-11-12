@@ -1,7 +1,8 @@
 /** Active-client-only transaction coordinator. No backend VDF fallback belongs here. */
 export type XmxAction = "enable" | "disable" | "configure" | "adopt_trial";
 export interface XmxProfile {
-  driver: "default" | "26.1" | "26.3";
+  // Backend-discovered version family or explicit stock+layer route, never a path.
+  driver: string;
   discovery: "auto" | "alternate";
   diagnostics: boolean;
   // 0 = the game's own choice; 2-4 Intel's override range; 5-8 upstream experimental.
@@ -11,10 +12,14 @@ export interface XmxProfile {
   // XESS=latest: Intel's SDK libraries instead of the game's older ones.
   sdk_latest: boolean;
 }
+export function isXmxDriver(value: unknown): value is string {
+  return typeof value === "string" && (value === "default"
+    || value.match(/^(?:stock-)?[0-9]{1,4}\.[0-9]{1,4}(?:\.[0-9]{1,4})?(?:-[A-Za-z0-9_.-]{1,32})?/)?.[0] === value);
+}
 export function isXmxProfile(value: unknown): value is XmxProfile {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const p = value as XmxProfile;
-  return Object.keys(p).length === 6 && ["default", "26.1", "26.3"].includes(p.driver)
+  return Object.keys(p).length === 6 && isXmxDriver(p.driver)
     && ["auto", "alternate"].includes(p.discovery) && typeof p.diagnostics === "boolean"
     && Number.isInteger(p.fg) && [0, 2, 3, 4, 5, 6, 7, 8].includes(p.fg)
     && Number.isInteger(p.bridge) && [0, 1, 2].includes(p.bridge)

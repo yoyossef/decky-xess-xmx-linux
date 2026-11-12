@@ -1630,6 +1630,24 @@ finally:
         self.assertEqual(os.getxattr(target, 'user.example'), b'changed by user after planning')
         self.assertEqual(target.read_bytes(), b'original')
 
+    def test_fresh_game_uses_locally_prepared_package_without_guessed_home_folder(self):
+        from optiscaler import xmx_package
+        prepared = self.home/'xess-xmx-linux-new-release'
+        self.package.rename(prepared)
+        with patch.object(xmx_package, 'get_status', return_value={
+                'state': 'ready', 'package': {'path': str(prepared)}}):
+            status = self.manager.get_xmx_status('1817230')
+        self.assertTrue(status['package']['valid'], status)
+        self.assertEqual(status['suggested_package'], str(prepared))
+        self.assertFalse(status['installed'])
+
+    def test_missing_package_has_actionable_download_error_not_raw_enoent(self):
+        missing = self.home/'not-downloaded'
+        status = self.manager.get_xmx_status('1817230', str(missing))
+        self.assertFalse(status['package']['valid'])
+        self.assertIn('Download package', '; '.join(status['package']['errors']))
+        self.assertNotIn('[Errno 2]', '; '.join(status['package']['errors']))
+
     def test_status_keeps_selected_package_after_restart_without_frontend_resupplying_path(self):
         moved = self.home/'custom package with spaces'
         self.package.rename(moved)

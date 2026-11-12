@@ -1,5 +1,6 @@
 """Strict per-game XeSS profile rendering; no session/global mutations."""
 from pathlib import Path
+import json
 import re
 import shlex
 import struct
@@ -17,6 +18,12 @@ BRIDGE_CHOICES = (0, 1, 2)
 ALTERNATE = r'C:\windows\system32\driverstore\filerepository\igd_faux.inf_1'
 
 
+def driver_id(value):
+    """Version-family selector, never a filesystem path or an executable token."""
+    return isinstance(value, str) and (value == 'default' or
+        re.fullmatch(r'(?:stock-)?[0-9]{1,4}\.[0-9]{1,4}(?:\.[0-9]{1,4})?(?:-[A-Za-z0-9_.-]{1,32})?', value) is not None)
+
+
 def normalize(profile):
     if profile is None:
         return dict(DEFAULT)
@@ -25,7 +32,7 @@ def normalize(profile):
     if not isinstance(profile, dict) or not set(profile) <= set(DEFAULT):
         raise ValueError('Invalid profile: driver, discovery, diagnostics and integer fg required')
     profile = {**DEFAULT, **profile}
-    if (profile['driver'] not in ('default', '26.1', '26.3') or
+    if (not driver_id(profile['driver']) or
             profile['discovery'] not in ('auto', 'alternate') or
             type(profile['diagnostics']) is not bool or
             type(profile['fg']) is not int or profile['fg'] not in FG_CHOICES or
@@ -41,7 +48,12 @@ def drivers(manager, package, diagnostics):
         result[0]['reason'] = '; '.join(diagnostics['errors'])
         return result
     package = Path(package).resolve(strict=True)
-    for selector in ('26.1', '26.3'):
+    selectors = set()
+    for candidate in (package/'lib').glob('mesa-*'):
+        match = re.fullmatch(r'mesa-((?:stock-)?[0-9]{1,4}\.[0-9]{1,4})(?:\.[0-9]{1,4})?(?:-[A-Za-z0-9_.-]{1,32})?', candidate.name)
+        if match:
+            selectors.add(match[1])
+    for selector in sorted(selectors):
         matches = sorted(p for p in (package/'lib').glob('mesa-'+selector+'*')
                          if p.name == 'mesa-'+selector or p.name.startswith('mesa-'+selector+'.')
                          or p.name.startswith('mesa-'+selector+'-'))
@@ -64,6 +76,10 @@ def drivers(manager, package, diagnostics):
             manager._user_access(path, read=True)
             if path.samefile(package/'lib/libvulkan_intel.so'):
                 raise ValueError('Mesa selector points to dispatcher instead of real driver')
+            if selector.startswith('stock-'):
+                # Stock ANV alone does not implement the kernel-splicing path.
+                layer_env(manager, package)
+                entry['label'] = 'Mesa '+selector[6:]+' (stock + XMX layer, Xe3 only)'
             entry.update(valid=True, path=str(path))
         except (OSError, ValueError, struct.error) as exc:
             entry['reason'] = str(exc)
@@ -71,8 +87,35 @@ def drivers(manager, package, diagnostics):
     return result
 
 
+def layer_env(manager, package):
+    """Validate the optional modern layer before a stock-driver profile uses it."""
+    path = package/'layer'
+    binary = path/'libVkLayer_xess_xmx.so'
+    data = manager._source_bytes(package, binary.relative_to(package))
+    if (len(data) < 64 or data[:7] != b'\x7fELF\x02\x01\x01' or
+            struct.unpack_from('<H', data, 18)[0] != 62 or
+            struct.unpack_from('<H', data, 16)[0] not in (2, 3)):
+        raise ValueError('XMX layer is not an ELF64 x86-64 library')
+    manifest = json.loads(manager._source_bytes(package, 'layer/VkLayer_xess_xmx.json'))
+    if not isinstance(manifest, dict) or not isinstance(manifest.get('layer'), dict):
+        raise ValueError('Unsupported XMX layer manifest')
+    layer = manifest['layer']
+    library = layer.get('library_path')
+    if (layer.get('name') != 'VK_LAYER_XESS_xmx' or not isinstance(library, str)
+            or Path(library).is_absolute() or '..' in Path(library).parts
+            or (path/library).resolve(strict=True) != binary.resolve(strict=True)):
+        raise ValueError('Unsupported XMX layer manifest')
+    manager._user_access(binary, read=True)
+    return {'VK_ADD_LAYER_PATH': path, 'VK_LOADER_LAYERS_ENABLE': 'VK_LAYER_XESS_xmx',
+            'XMX_LAYER_HELPER': package/'tools/cm-compile.sh', 'XMX_IGC_DIR': package/'igc'}
+
+
 def recognize_trial(observed, managed):
-    for driver in ('default', '26.1', '26.3'):
+    selected = re.match(r'^MESA=([^ ]+) ', observed)
+    selectors = ['default', '26.1', '26.3']
+    if selected and driver_id(selected[1]) and selected[1] not in selectors:
+        selectors.append(selected[1])
+    for driver in selectors:
         for alternate in (False, True):
             for diagnostics in (False, True):
                 for fg in FG_CHOICES:
@@ -153,6 +196,13 @@ def render(manager, package, targets, profile, diagnostics):
            'ANV_CM_HELPER': package/'tools/cm-compile.sh', 'force_vk_vendor': '0'}
     if profile['driver'] != 'default':
         env['MESA'] = profile['driver']
+    if (profile['driver'].startswith('stock-') or
+            profile['driver'] == 'default' and
+            Path(diagnostics.get('selected_driver', '')).parent.name.startswith('mesa-stock-')):
+        if not any(device.get('xmx_capable') and str(device.get('device', '')).lower().startswith(('0xb08', '0xfd8'))
+                   for device in manager._gpu().get('devices', [])):
+            raise ValueError('The stock driver XMX layer currently supports Xe3 GPUs only')
+        env.update(layer_env(manager, package))
     if profile['discovery'] == 'alternate':
         env['INTC_ALT_DRIVER_EXTENSIONS_PATH'] = ALTERNATE
     if profile['diagnostics']:
@@ -173,4 +223,12 @@ def render(manager, package, targets, profile, diagnostics):
         # With the bridge on, XeSS frame generation may run at the game's own
         # multiplier; the XeLL log still carries the low-latency evidence.
         env['IGDEXT_XELL_LOG'] = '1'
-    return '\n'.join('export '+key+'='+shlex.quote(str(value)) for key, value in env.items())+'\n', library
+    rendered = '\n'.join('export '+key+'='+shlex.quote(str(value)) for key, value in env.items())+'\n'
+    if 'VK_ADD_LAYER_PATH' in env:
+        # VK_LAYER_PATH overrides VK_ADD_LAYER_PATH in the loader. Prepend our
+        # layer to an inherited explicit path, but do not create an override
+        # when absent (that would hide the system's default layer locations).
+        rendered += ('if [ -n "${VK_LAYER_PATH:-}" ]; then export VK_LAYER_PATH='+
+                     shlex.quote(str(package/'layer'))+':"$VK_LAYER_PATH"; '
+                     'elif [ "${VK_LAYER_PATH+x}" = x ]; then unset VK_LAYER_PATH; fi\n')
+    return rendered, library
