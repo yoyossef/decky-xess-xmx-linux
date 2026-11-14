@@ -156,7 +156,7 @@ await test("game toggle runs the owned transaction and applies options to Steam"
 await test("already-enabled game is configured; edits keep the whole profile", async () => {
   let state: typeof bridged = {
     ...hooked, bridges: ["3357650"],
-    bridge_profiles: { "3357650": { bridge: 2, sdk_latest: false, fg: 0 } },
+    bridge_profiles: { "3357650": { bridge: 2, sdk_latest: true, fg: 0 } },
   };
   let live = "'/state/apps/3357650/launch.sh' %command%";
   const wrapper = live;
@@ -189,19 +189,77 @@ await test("already-enabled game is configured; edits keep the whole profile", a
     assert.equal(toggle(p.host, "FSR\u2192XeSS bridge").checked, true);
     assert.match(p.host.textContent ?? "", /Frame generation runs on XeSS/, "FG-only mode is described");
     await press(p.host, "Bridge details");
-    assert.equal(toggle(p.host, "Latest Intel XeSS SDK").checked, false);
+    assert.equal(p.host.querySelector('input[type=checkbox][aria-label="Latest Intel XeSS SDK"]'), null,
+      "the Intel SDK choice now lives in Setup, not in bridge details");
     assert.equal(button(p.host, "Frame generation only on XeSS").getAttribute("data-disabled"), "true",
       "the active route button is the current one");
-    await flip(p.host, "Latest Intel XeSS SDK");
-    assert.equal(seen[0].action, "configure", "an installed game must never be re-enabled");
-    assert.equal(seen[0].profile.driver, "26.3", "the untouched driver choice survives the edit");
-    assert.equal(seen[0].profile.bridge, 2);
-    assert.equal(seen[0].profile.sdk_latest, true, "sdk edit keeps mode and on-state");
-    assert.equal(toggle(p.host, "Latest Intel XeSS SDK").checked, true);
     await press(p.host, "Full \u2014 FSR upscaling + frame generation on XeSS");
-    assert.equal(seen[1].profile.bridge, 1, "route switch");
-    assert.equal(seen[1].profile.sdk_latest, true, "route switch keeps sdk_latest");
-    assert.equal(seen[1].profile.driver, "26.3");
+    assert.equal(seen[0].action, "configure", "an installed game must never be re-enabled");
+    assert.equal(seen[0].profile.bridge, 1, "route switch");
+    assert.equal(seen[0].profile.sdk_latest, true, "route switch keeps the Intel SDK choice");
+    assert.equal(seen[0].profile.driver, "26.3", "the untouched driver choice survives the edit");
+  } finally { await p.cleanup(); }
+});
+
+await test("the bridge panel shows an explicit green hooks indicator when the launch hooks are installed", async () => {
+  fixtures.get_fsr_bridge_state = () => hooked;
+  const p = await render(<GameFsrBridge appid="3357650" />);
+  try {
+    const ok = p.host.querySelector('[data-hooks-state="ok"]');
+    if (!ok) throw new Error("green hooks indicator shown");
+    assert.match(ok.textContent ?? "", /Proton launch hooks: installed/);
+    assert.match(ok.getAttribute("style") ?? "", /#57c457|rgb\(87/, "the indicator is green");
+    assert.match(ok.textContent ?? "", /1\/1/, "the indicator counts the hooked Protons");
+  } finally { await p.cleanup(); }
+});
+
+await test("the bridge panel flags stale hooks in red instead of green", async () => {
+  fixtures.get_fsr_bridge_state = () => ({ ...hooked,
+    hooks: { ...hooked.hooks, stale: ["Proton 11.0"] } });
+  const p = await render(<GameFsrBridge appid="3357650" />);
+  try {
+    const bad = p.host.querySelector('[data-hooks-state="stale"]');
+    if (!bad) throw new Error("stale hooks flagged");
+    assert.match(bad.textContent ?? "", /stale/i);
+    assert.match(bad.getAttribute("style") ?? "", /#e05c5c|rgb\(224/, "stale flagged in the error colour");
+    assert.doesNotMatch(p.host.textContent ?? "", /Proton launch hooks: installed/);
+  } finally { await p.cleanup(); }
+});
+
+await test("switching the bridge off keeps the Intel SDK libraries choice", async () => {
+  let state: typeof bridged = {
+    ...hooked, bridges: ["3357650"],
+    bridge_profiles: { "3357650": { bridge: 1, sdk_latest: true, fg: 0 } },
+  };
+  let live = "'/state/apps/3357650/launch.sh' %command%";
+  const wrapper = live;
+  const seen: any[] = [];
+  (globalThis as any).SteamClient = { Apps: {
+    GetAppLaunchOptions: async () => live,
+    SetAppLaunchOptions: (_id: number, options: string) => { live = options; },
+  } };
+  fixtures.get_fsr_bridge_state = () => state;
+  fixtures.get_xmx_status = () => ({ ok: true, installed: true, legacy: false, phase: "enabled",
+    runtime_verified: false,
+    profile: { driver: "26.3", discovery: "auto", diagnostics: false, fg: 0, bridge: 1, sdk_latest: true } });
+  fixtures.plan_xmx = (_appid: string, _dir: string, options: string, action: string, profile: any) => {
+    seen.push({ action, profile });
+    return { ok: true, plan_id: "plan-off", old_launch_options: options, desired_launch_options: wrapper, operations: [] };
+  };
+  fixtures.apply_xmx = (_appid: string, _plan: string) => ({ ok: true, plan_id: "plan-off",
+    action: "configure", phase: "pending_configure", old_launch_options: wrapper,
+    desired_launch_options: wrapper, pending_launch: true });
+  fixtures.finish_xmx = (_appid: string, _plan: string, options: string) => {
+    live = options;
+    return { ok: true, installed: true, phase: "enabled", pending_launch: false };
+  };
+  const p = await render(<GameFsrBridge appid="3357650" />);
+  try {
+    assert.equal(toggle(p.host, "FSR\u2192XeSS bridge")?.checked, true);
+    await flip(p.host, "FSR\u2192XeSS bridge");
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].profile.bridge, 0);
+    assert.equal(seen[0].profile.sdk_latest, true, "the Intel SDK choice survives the bridge switch-off");
   } finally { await p.cleanup(); }
 });
 

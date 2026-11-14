@@ -118,6 +118,43 @@ export function RowButton({
   );
 }
 
+/** Immediate remediation next to an ownership-conflict error: force the
+ * plugin's own bytes back, or adopt what the game/Proton rebuilt. */
+export function OwnershipRemediation(props: {
+  conflicts: { target: string; expected_sha256: string | null; current_sha256: string | null }[];
+  busy: boolean;
+  onChoose: (choice: "restore" | "adopt") => void;
+}) {
+  const button = {
+    padding: "6px 10px", borderRadius: 4, fontSize: "0.75rem",
+    background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.2)",
+    color: "inherit", cursor: "pointer",
+  };
+  return (
+    <div role="alert" style={{ display: "grid", gap: "0.4rem", color: "#e05c5c" }}>
+      <div>Managed files no longer match what this plugin installed:</div>
+      <ul style={{ margin: 0, paddingLeft: "1.2rem", fontSize: "0.72rem", opacity: 0.85 }}>
+        {props.conflicts.map(c => (
+          <li key={c.target} style={{ wordBreak: "break-all" }}>{c.target}</li>
+        ))}
+      </ul>
+      <div style={{ fontSize: "0.72rem", color: "inherit", opacity: 0.8 }}>
+        Restore my files writes back exactly what the plugin installed. Adopt
+        current files keeps what is on disk as the new baseline — the plugin
+        stores its own copy, so restore stays available afterwards.
+      </div>
+      <div style={{ display: "flex", gap: "0.5rem" }}>
+        <Focusable onClick={() => { if (!props.busy) props.onChoose("restore"); }}>
+          <button style={button} disabled={props.busy}>Restore my files</button>
+        </Focusable>
+        <Focusable onClick={() => { if (!props.busy) props.onChoose("adopt"); }}>
+          <button style={button} disabled={props.busy}>Adopt current files</button>
+        </Focusable>
+      </div>
+    </div>
+  );
+}
+
 export function Centered({ children }: { children: ReactNode }) {
   return (
     <Focusable style={{ padding: "24px", textAlign: "center", opacity: 0.75 }}>

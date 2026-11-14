@@ -853,6 +853,126 @@ assert manager.recover_xmx('1817230', plan['plan_id'], '')['ok']
                                      enabled['desired_launch_options'], 'configure')
         self.assertFalse(plan['ok'], plan)
         self.assertIn('Owned file conflict', plan['error'])
+    def _driver(self):
+        return self.system32/'driverstore/filerepository/igd_faux.inf_1/igdext64.dll'
+
+    def _installed(self):
+        return json.loads((self.manager.root/'apps'/'1817230'/'installed.json').read_text())
+
+    def test_proton_metadata_touch_on_owned_file_reseals_instead_of_lockout(self):
+        # Real device class: launching the game re-extracts the driver store INF
+        # (same bytes, rounded mtime). Ownership must follow reality, not freeze.
+        enabled = self.enable()
+        driver = self._driver()
+        stale = xmx.snapshot(driver)
+        os.utime(driver, ns=(stale['atime_ns'], stale['mtime_ns'] + 11_000_000_000))
+        plan = self.manager.plan_xmx('1817230', str(self.package),
+                                     enabled['desired_launch_options'], 'configure')
+        self.assertTrue(plan['ok'], plan)
+        record = self._installed()
+        op = [o for o in record['operations'] if o['target'] == str(driver)][0]
+        self.assertEqual(op['installed']['mtime_ns'], stale['mtime_ns'] + 11_000_000_000)
+        self.assertEqual(op['installed']['sha256'], stale['sha256'])
+        self.assertEqual(op['installed_sha256'], stale['sha256'])
+
+    def test_metadata_touch_does_not_block_disable(self):
+        enabled = self.enable()
+        driver = self._driver()
+        stale = xmx.snapshot(driver)
+        os.utime(driver, ns=(stale['atime_ns'], stale['mtime_ns'] + 5_000_000_000))
+        plan = self.manager.plan_xmx('1817230', '', enabled['desired_launch_options'], 'disable')
+        self.assertTrue(plan['ok'], plan)
+        result = self.manager.apply_xmx('1817230', plan['plan_id'])
+        self.assertTrue(result['ok'], result)
+
+    def test_xattr_drift_on_owned_file_still_refuses_configure(self):
+        enabled = self.enable()
+        driver = self._driver()
+        os.setxattr(driver, 'user.foreign', b'touched')
+        plan = self.manager.plan_xmx('1817230', str(self.package),
+                                     enabled['desired_launch_options'], 'configure')
+        self.assertFalse(plan['ok'], plan)
+        self.assertIn('Owned file conflict', plan['error'])
+
+    def test_content_conflict_reports_actionable_targets_with_remediation(self):
+        import hashlib as h
+        enabled = self.enable()
+        driver = self._driver()
+        ours = h.sha256(driver.read_bytes()).hexdigest()
+        driver.write_bytes(b'foreign replacement bytes')
+        theirs = h.sha256(b'foreign replacement bytes').hexdigest()
+        plan = self.manager.plan_xmx('1817230', str(self.package),
+                                     enabled['desired_launch_options'], 'configure')
+        self.assertFalse(plan['ok'], plan)
+        self.assertIn('Owned file conflict', plan['error'])
+        self.assertEqual(plan['remediation'], ['restore', 'adopt'])
+        self.assertEqual(len(plan['conflicts']), 1)
+        conflict = plan['conflicts'][0]
+        self.assertEqual(conflict['target'], str(driver))
+        self.assertEqual(conflict['expected_sha256'], ours)
+        self.assertEqual(conflict['current_sha256'], theirs)
+
+    def test_resolve_adopt_records_third_party_reality_and_keeps_restore_available(self):
+        import hashlib as h
+        enabled = self.enable()
+        driver = self._driver()
+        plugin_bytes = driver.read_bytes()
+        driver.write_bytes(b'proton rebuilt this')
+        theirs = h.sha256(b'proton rebuilt this').hexdigest()
+        resolved = self.manager.resolve_xmx_ownership('1817230', 'adopt')
+        self.assertTrue(resolved['ok'], resolved)
+        record = self._installed()
+        op = [o for o in record['operations'] if o['target'] == str(driver)][0]
+        self.assertEqual(op['installed_sha256'], theirs)
+        self.assertTrue(xmx.same(xmx.snapshot(driver), op['installed']))
+        import base64 as b64
+        self.assertEqual(b64.b64decode(op['plugin_data']), plugin_bytes)
+        self.assertEqual(b64.b64decode(op['data']), b'proton rebuilt this')
+        plan = self.manager.plan_xmx('1817230', str(self.package),
+                                     enabled['desired_launch_options'], 'configure')
+        self.assertTrue(plan['ok'], plan)
+
+    def test_resolve_restore_after_adopt_returns_to_plugin_bytes(self):
+        enabled = self.enable()
+        driver = self._driver()
+        plugin_bytes = driver.read_bytes()
+        driver.write_bytes(b'proton rebuilt this')
+        self.assertTrue(self.manager.resolve_xmx_ownership('1817230', 'adopt')['ok'])
+        resolved = self.manager.resolve_xmx_ownership('1817230', 'restore')
+        self.assertTrue(resolved['ok'], resolved)
+        self.assertEqual(driver.read_bytes(), plugin_bytes)
+        record = self._installed()
+        op = [o for o in record['operations'] if o['target'] == str(driver)][0]
+        self.assertNotIn('plugin_data', op)
+        self.assertTrue(xmx.same(xmx.snapshot(driver), op['installed']))
+        plan = self.manager.plan_xmx('1817230', str(self.package),
+                                     enabled['desired_launch_options'], 'configure')
+        self.assertTrue(plan['ok'], plan)
+
+    def test_resolve_restore_rewrites_third_party_bytes(self):
+        enabled = self.enable()
+        driver = self._driver()
+        plugin_bytes = driver.read_bytes()
+        driver.write_bytes(b'foreign replacement bytes')
+        resolved = self.manager.resolve_xmx_ownership('1817230', 'restore')
+        self.assertTrue(resolved['ok'], resolved)
+        self.assertEqual(driver.read_bytes(), plugin_bytes)
+
+    def test_resolve_without_conflict_is_a_noop_not_a_rewrite(self):
+        self.enable()
+        resolved = self.manager.resolve_xmx_ownership('1817230', 'adopt')
+        self.assertFalse(resolved['ok'], resolved)
+        self.assertIn('No ownership conflict', resolved['error'])
+
+    def test_adopt_refuses_unowned_identity(self):
+        enabled = self.enable()
+        driver = self._driver()
+        driver.write_bytes(b'proton rebuilt this')
+        driver.chmod(0o600)
+        resolved = self.manager.resolve_xmx_ownership('1817230', 'adopt')
+        self.assertFalse(resolved['ok'], resolved)
+        self.assertIn('Owned file conflict', resolved['error'])
+        self.assertEqual(driver.read_bytes(), b'proton rebuilt this')
 
     def test_disable_defers_removal_until_confirmation_then_restores_metadata(self):
         original = self.system32/'ControlLib.dll'
@@ -1485,12 +1605,32 @@ finally:
         with patch.object(Path, 'iterdir', only_backend), self.denied_environments(process):
             self.manager._stopped('1817230', self.prefix)
 
-    def test_same_pid_number_in_another_proc_tree_is_not_a_self_exemption(self):
-        process = self.proc_fixture(os.getpid(), 'Decky OptiScale',
+    def test_undumpable_process_is_judged_by_game_affinity_not_by_title(self):
+        # An unreadable-environment process sharing our PID number is neither a
+        # self-exemption nor a threat: what matters is provable game affinity.
+        fake = self.proc_fixture(os.getpid(), 'Decky OptiScale',
             ['Decky OptiScaler (main.py)'], '/system.slice/plugin_loader.service')
-        with self.denied_environments(process):
-            with self.assertRaisesRegex(ValueError, 'host identity unproven'):
+        with self.denied_environments(fake):
+            self.manager._stopped('1817230', self.prefix)
+        affine = self.proc_fixture(99991, 'mystery-agent',
+            ['/opt/x/runner', '--attach',
+             str(self.home/'.local/share/Steam/steamapps/compatdata/1817230/pfx')],
+            '/user.slice/user-0.slice/session-1.scope')
+        with self.denied_environments(affine):
+            with self.assertRaisesRegex(ValueError, r'process 99991 \(mystery-agent ') as caught:
                 self.manager._stopped('1817230', self.prefix)
+        self.assertIn('game-related command line', str(caught.exception))
+
+    def test_undumpable_unrelated_host_daemon_does_not_block_planning(self):
+        # Live OXP3 incident 2026-11-14: a transitional sshd-session child title
+        # locked out Enable entirely. Any same-uid undumpable process without a
+        # game-affine command line must not block.
+        process = self.proc_fixture(42872, 'sshd-session',
+            ['sshd-session: yrostaqi', '', ''],
+            '/user.slice/user-1000.slice/session-42.scope')
+        with self.denied_environments(process):
+            plan = self.manager.plan_xmx('1817230', str(self.package), '')
+        self.assertTrue(plan['ok'], plan)
 
     def test_oxp3_undumpable_decky_helpers_do_not_block_planning(self):
         cgroup = '/system.slice/plugin_loader.service'
@@ -1583,6 +1723,16 @@ finally:
         with self.denied_environments(process):
             plan = self.manager.plan_xmx('1817230', str(self.package), '')
         self.assertTrue(plan['ok'], plan)
+        # OpenSSH also holds the session child briefly (and on notty persistently)
+        # with a bare 'sshd-session: <user>' title before/without the @target suffix.
+        (process/'cmdline').write_bytes(os.fsencode(f'sshd-session: {username}')+b'\0\0\0')
+        with self.denied_environments(process):
+            plan = self.manager.plan_xmx('1817230', str(self.package), '')
+        self.assertTrue(plan['ok'], plan)
+        # The strict sshd identity chain itself (not only the generic affinity
+        # rule) must recognize the bare padded title.
+        with self.denied_environments(process):
+            self.assertTrue(self.manager._known_host_process(process))
 
     def test_running_game_refuses_mutation_even_if_it_started_after_planning(self):
         plan = self.manager.plan_xmx('1817230', str(self.package), '')

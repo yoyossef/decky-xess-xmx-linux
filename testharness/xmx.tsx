@@ -1536,6 +1536,57 @@ await test("native profile choices are read-only until update preview and edits 
   Object.assign(fixtures, old);
 });
 
+await test("the setup tab exposes the Intel SDK libraries toggle and it reaches the profile", async () => {
+  const old = { ...fixtures };
+  const planned: unknown[][] = [];
+  fixtures.get_pref = (key: string) => ({ key, value: "/package" });
+  fixtures.get_xmx_status = profileStatus;
+  fixtures.plan_xmx = (...args: unknown[]) => { planned.push(args); return { ok: true, plan_id: "sdk", old_launch_options: args[2], desired_launch_options: "new %command%", operations: [] }; };
+  await withLaunchClient({ GetAppLaunchOptions: () => "old %command%" }, async () => {
+    const p = await renderPanel();
+    await openDetails(p.host);
+    try {
+      assert.equal(nativeControl<HTMLInputElement>(p.host, "Latest Intel XeSS SDK").checked, false);
+      await toggle(p.host, "Latest Intel XeSS SDK");
+      await press(p.host, "Save settings\u2026");
+      assert.deepEqual(planned.at(-1)?.[4], { driver: "default", discovery: "auto", diagnostics: false, fg: 0, bridge: 0, sdk_latest: true });
+    } finally { await p.cleanup(); }
+  });
+  Object.assign(fixtures, old);
+});
+
+await test("profile edits announce themselves as unsaved until Save completes", async () => {
+  const old = { ...fixtures };
+  let saved = { ...defaultProfile };
+  let planned: any = null;
+  fixtures.get_pref = (key: string) => ({ key, value: "/package" });
+  fixtures.get_xmx_status = () => ({ ...profileStatus, profile: saved });
+  fixtures.plan_xmx = (_a: unknown, _p: unknown, _o: unknown, _act: unknown, profile: any) => {
+    planned = profile;
+    return { ok: true, plan_id: "unsaved", old_launch_options: "wrap %command%", desired_launch_options: "wrap %command%", operations: [] };
+  };
+  fixtures.apply_xmx = { ok: true, plan_id: "unsaved", action: "configure", phase: "pending_configure",
+    old_launch_options: "wrap %command%", desired_launch_options: "wrap %command%", pending_launch: true };
+  fixtures.finish_xmx = () => { saved = { ...planned }; return { ok: true, installed: true, phase: "enabled", pending_launch: false }; };
+  await withLaunchClient({ GetAppLaunchOptions: () => "wrap %command%" }, async () => {
+    const p = await renderPanel();
+    await openDetails(p.host);
+    try {
+      assert.equal(p.host.querySelector("[data-unsaved]"), null, "a pristine form claims nothing");
+      await toggle(p.host, "Latest Intel XeSS SDK");
+      const flag = p.host.querySelector("[data-unsaved]");
+      if (!flag) throw new Error("edits flagged as unsaved");
+      assert.match(flag.textContent ?? "", /Unsaved changes/, "the flag explains itself");
+      await press(p.host, "Save settings\u2026");
+      assert.ok(p.host.querySelector("[data-unsaved]"), "a preview is still not a save");
+      await press(p.host, "Apply changes");
+      await act(async () => new Promise(r => setTimeout(r, 50)));
+      assert.equal(p.host.querySelector("[data-unsaved]"), null, "the flag clears once the record matches");
+    } finally { await p.cleanup(); }
+  });
+  Object.assign(fixtures, old);
+});
+
 await test("frame generation defaults to the game's own, reaches the profile and reads back in the preview", async () => {
   const old = { ...fixtures };
   const planned: unknown[][] = [];
@@ -2619,6 +2670,35 @@ for (const malicious of [false, true]) {
     Object.assign(fixtures, old);
   });
 }
+
+await test("ownership conflict offers immediate restore or adopt beside the error", async () => {
+  const old = { ...fixtures };
+  fixtures.get_xmx_status = statusFixture;
+  fixtures.plan_xmx = () => ({
+    ok: false, error: "Owned file conflict: /prefix/igdext64.dll",
+    conflicts: [{ target: "/prefix/igdext64.dll", expected_sha256: "a".repeat(64), current_sha256: "b".repeat(64) }],
+    remediation: ["restore", "adopt"],
+  });
+  fixtures.resolve_xmx_ownership = { ok: true, choice: "restore", resolved: ["/prefix/igdext64.dll"], metadata_resealed: [] };
+  await withLaunchClient({ GetAppLaunchOptions: () => "same" }, async () => {
+    const p = await renderPanel();
+    try {
+      const before = rpcCalls.length;
+      await press(p.host, "Enable XMX…");
+      assert.match(p.host.textContent ?? "", /Owned file conflict/);
+      assert.match(p.host.textContent ?? "", /Restore my files/);
+      assert.match(p.host.textContent ?? "", /Adopt current files/);
+      assert.equal(rpcCalls.slice(before).includes("resolve_xmx_ownership"), false, "conflict alone must not write");
+      const restore = Array.from(p.host.querySelectorAll("button")).find(e => e.textContent === "Restore my files");
+      if (!restore) throw new Error("restore button present");
+      await act(async () => { restore.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+      assert.ok(rpcCalls.slice(before).includes("resolve_xmx_ownership"), "remediation calls the backend");
+      assert.doesNotMatch(p.host.textContent ?? "", /Restore my files/, "remediation UI clears after success");
+    } finally { await p.cleanup(); }
+  });
+  Object.assign(fixtures, old);
+});
 
 await test("nuke stays reachable when the installation status is unavailable", async () => {
   const old = { ...fixtures };

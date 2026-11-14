@@ -85,7 +85,7 @@ REPO = 'HHHHanasak1/xess-xmx-linux'
 LATEST_URL = f'https://api.github.com/repos/{REPO}/releases/latest'
 # Release validated against this plugin build. prepare() downloads ONLY this
 # tag; bump it (plus tests + release) after validating a new upstream tag.
-PINNED_TAG = '20261111'
+PINNED_TAG = '20261113'
 PINNED_URL = f'https://api.github.com/repos/{REPO}/releases/tags/{PINNED_TAG}'
 MAX_ARCHIVE = 128 * 1024 * 1024
 

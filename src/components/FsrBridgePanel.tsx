@@ -4,8 +4,9 @@ import { XmxController, type XmxProfile } from "../xmx";
 import { readLaunchOptions, setLaunchOptions } from "../hooks/useRunningGame";
 import {
   applyXmx, finishXmx, getFsrBridgeState, getXmxStatus, installFsrBridge, isXmxStatus,
-  planXmx, recoverXmx, uninstallFsrBridge, type FsrBridgeState,
+  planXmx, recoverXmx, resolveXmxOwnership, uninstallFsrBridge, type FsrBridgeState,
 } from "../xmxApi";
+import { OwnershipRemediation } from "./Common";
 
 /** Exact-shape check: a malformed RPC answer must never drive the panel. */
 export function isFsrBridgeState(value: unknown): value is FsrBridgeState {
@@ -89,6 +90,8 @@ function useBridgeState() {
 
 const small: React.CSSProperties = { fontSize: "0.8rem", opacity: 0.8, padding: "4px 0" };
 const errorStyle: React.CSSProperties = { color: "var(--gpColor-Error, #e05c5c)", fontSize: "0.8rem" };
+const okStyle: React.CSSProperties = { color: "#57c457", fontSize: "0.8rem", fontWeight: 600 };
+const hookErrorStyle: React.CSSProperties = { ...errorStyle, color: "#e05c5c" };
 
 const DEFAULT_PROFILE: XmxProfile = { driver: "default", discovery: "auto", diagnostics: false, fg: 0, bridge: 0, sdk_latest: false };
 
@@ -123,6 +126,7 @@ export function GameFsrBridge({ appid, running }: Readonly<{ appid: string | nul
     apply: applyXmx,
     finish: finishXmx,
     recover: recoverXmx,
+    resolve: resolveXmxOwnership,
   }));
   useEffect(() => () => controller.dispose(), [controller]);
   const send = (nextOn: boolean, nextMode: number, nextSdk: boolean) => mutateFlow(`game:${appid}`, async () => {
@@ -134,7 +138,7 @@ export function GameFsrBridge({ appid, running }: Readonly<{ appid: string | nul
     const nextProfile: XmxProfile = {
       ...(status.profile ?? DEFAULT_PROFILE),
       bridge: nextOn ? nextMode : 0,
-      sdk_latest: nextOn && nextSdk,
+      sdk_latest: nextSdk,
     };
     await controller.preview(state.package.path, status.installed ? "configure" : "enable", nextProfile);
     if (controller.state.error) throw new Error(controller.state.error);
@@ -150,6 +154,31 @@ export function GameFsrBridge({ appid, running }: Readonly<{ appid: string | nul
       </div>
     </PanelSectionRow>
     {error && <PanelSectionRow><div style={errorStyle}>{error}</div></PanelSectionRow>}
+    {controller.state.conflicts && (
+      <PanelSectionRow>
+        <OwnershipRemediation conflicts={controller.state.conflicts} busy={busy !== null || controller.state.busy}
+          onChoose={choice => void mutate(`ownership:${choice}`, async () => {
+            await controller.remediate(choice);
+            return controller.state.error ? { ok: false, error: controller.state.error } : { ok: true };
+          })} />
+      </PanelSectionRow>
+    )}
+    {appid && state && (() => {
+      const hooks = state.hooks;
+      const total = hooks.protons.length;
+      const stale = hooks.stale ?? [];
+      const good = hooks.installed && !stale.length && !hooks.plain.length;
+      const tone = good ? okStyle : hookErrorStyle;
+      const data = good ? "ok" : stale.length ? "stale" : hooks.installed ? "partial" : "missing";
+      const text = stale.length
+        ? `Proton launch hooks: stale (${stale.join(", ")}) — reinstall to re-point them at the current package`
+        : !hooks.installed
+          ? "Proton launch hooks: not installed — games cannot swap libraries at launch yet"
+          : hooks.plain.length
+            ? `Proton launch hooks: missing on ${hooks.plain.join(", ")} (${hooks.hooked.length}/${total} covered)`
+            : `Proton launch hooks: installed (${hooks.hooked.length}/${total} Proton${total === 1 ? "" : "s"}) — active while a game runs`;
+      return <PanelSectionRow><div style={tone} data-hooks-state={data}>{text}</div></PanelSectionRow>;
+    })()}
     {!appid && <PanelSectionRow>
       <div style={small}>The bridge works per Steam game; this entry has no App ID.</div>
     </PanelSectionRow>}
@@ -201,12 +230,6 @@ export function GameFsrBridge({ appid, running }: Readonly<{ appid: string | nul
           onClick={() => void send(true, 2, profile?.sdk_latest ?? false)}>
           Frame generation only on XeSS
         </ButtonItem>
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <ToggleField label="Latest Intel XeSS SDK" checked={profile?.sdk_latest ?? false}
-          disabled={busy !== null}
-          description="Use the package's XeSS libraries instead of the game's own (XESS=latest)"
-          onChange={(next) => void send(on, mode, next)} />
       </PanelSectionRow>
     </>}
   </PanelSection>;

@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { getPref, setPref } from "../api";
 import { readLaunchOptions, setLaunchOptions } from "../hooks/useRunningGame";
 import { XmxController, type XmxProfile, type XmxState } from "../xmx";
-import { applyXmx, finishXmx, getXmxLogs, getXmxStatus, isXmxLogs, isXmxStatus, planXmx, recoverXmx, type XmxLogs, type XmxStatus } from "../xmxApi";
+import { applyXmx, finishXmx, getXmxLogs, getXmxStatus, isXmxLogs, isXmxStatus, planXmx, recoverXmx, resolveXmxOwnership, type XmxLogs, type XmxStatus } from "../xmxApi";
+import { OwnershipRemediation } from "./Common";
 import { NukeSection } from "./NukeSection";
 import { XessDllPanel, type XessDllInterlock } from "./XessDllPanel";
 import { XmxPackagePanel } from "./XmxPackagePanel";
@@ -60,6 +61,7 @@ function XmxPanelSession({ appid, running }: Props) {
     apply: applyXmx,
     finish: finishXmx,
     recover: recoverXmx,
+    resolve: resolveXmxOwnership,
   }));
   const [transaction, setTransaction] = useState<XmxState>({ ...controller.state });
   const prefixRecovery = () => Boolean(controller.state.pending || controller.state.recoveryBlocked || controller.state.needsRefresh
@@ -204,6 +206,15 @@ function XmxPanelSession({ appid, running }: Props) {
   const drivers = status?.drivers?.filter(driver => driver.valid) ?? [{ id: "default" as const, label: "Package default", valid: true }];
   const driverValid = drivers.some(driver => driver.id === profile.driver);
   const selectedProfile = status?.profile || status?.drivers || profileEdited.current ? profile : undefined;
+  // An edit that is never saved silently reverts on the next read — say so.
+  const savedForm = status?.installed && status.profile
+    ? { driver: status.profile.driver, discovery: status.profile.discovery, diagnostics: status.profile.diagnostics,
+        fg: status.profile.fg ?? 0, bridge: status.profile.bridge ?? 0, sdk_latest: status.profile.sdk_latest ?? false }
+    : null;
+  const unsaved = Boolean(savedForm) && Boolean(status?.profile) && Boolean(status) && (
+    savedForm!.driver !== profile.driver || savedForm!.discovery !== profile.discovery ||
+    savedForm!.diagnostics !== profile.diagnostics || savedForm!.fg !== profile.fg ||
+    savedForm!.bridge !== profile.bridge || savedForm!.sdk_latest !== profile.sdk_latest);
   // Live mirror of the form: a callback retained from an older render previews
   // against the CURRENT form or refuses loudly, never a stale captured state.
   const liveForm = useRef({ packageDir, profile, selectedProfile });
@@ -255,6 +266,7 @@ function XmxPanelSession({ appid, running }: Props) {
     setProfile(previous => ({ ...previous, ...change }));
     controller.state.preview = null;
     controller.state.error = null;
+    controller.state.conflicts = null;
     controller.state.success = false;
     setTransaction({ ...controller.state });
   };
@@ -276,6 +288,7 @@ function XmxPanelSession({ appid, running }: Props) {
     setError(null);
     controller.state.preview = null;
     controller.state.error = null;
+    controller.state.conflicts = null;
     controller.state.success = false;
     dllInterlock.clearPreview?.();
     setTransaction({ ...controller.state });
@@ -327,11 +340,19 @@ function XmxPanelSession({ appid, running }: Props) {
         {status?.flatpak?.visible === false ? <div role="alert">{status.flatpak.reason || "Package is not visible to Steam."} Check Details → Flatpak visibility and Steam sandbox access, then Refresh.</div> : null}
         {running ? <div>Stop this game before making changes.</div> : null}
         {error || transaction.error ? <div role="alert">{error || transaction.error}</div> : null}
+        {transaction.conflicts ? <PanelSectionRow><OwnershipRemediation
+          conflicts={transaction.conflicts} busy={transaction.busy}
+          onChoose={choice => void run(() => controller.remediate(choice))} /></PanelSectionRow> : null}
         {preferenceWarning ? <div role="alert">{preferenceWarning}</div> : null}
         {guardWarning ? <div role="alert">{guardWarning}</div> : null}
         {logsError ? <div role="alert">{logsError}</div> : null}
         {transaction.success ? <div>Launch options verified. Transaction completed; runtime remains unverified.</div> : null}
       </PanelSectionRow>
+      {unsaved ? <PanelSectionRow>
+        <div data-unsaved="true" style={{ color: "#e5b567", fontSize: "0.8rem", fontWeight: 600 }}>
+          Unsaved changes — press &quot;Save settings…&quot; to keep them.
+        </div>
+      </PanelSectionRow> : null}
       <XmxPackagePanel currentPath={packageDir} needsPackage={!packageDir.trim() || status?.package?.valid === false}
         selectionDisabled={!canSelectPackage()} onSelect={dir => editPackage(dir, true, epoch)} onPrepared={selectFreshPackage} />
       <PanelSectionRow>
@@ -350,6 +371,11 @@ function XmxPanelSession({ appid, running }: Props) {
           strDefaultLabel="Game's choice"
           disabled={blocked || needsRecovery || editingBlocked}
           onChange={option => editProfile({ fg: Number(dropOption(option)) })} />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ToggleField label="Latest Intel XeSS SDK" checked={profile.sdk_latest}
+          description="Runs the game with Intel's SDK XeSS libraries (swaps the full set while the game runs). Needed by games whose own frame generation library is too old, e.g. Cyberpunk 2077. Requires the launch hooks from the FSR bridge tab."
+          disabled={blocked || needsRecovery || editingBlocked} onChange={checked => editProfile({ sdk_latest: checked })} />
       </PanelSectionRow>
       <PanelSectionRow>
         <ToggleField label="Intel detection fix" checked={profile.discovery === "alternate"}

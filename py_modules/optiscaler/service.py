@@ -471,6 +471,9 @@ class OptiScalerService:
         return await self._xmx_call("plan_xmx", appid, package_dir, launch_options, action, profile,
                                     mutation=True)
 
+    async def resolve_xmx_ownership(self, appid, choice):
+        return await self._xmx_call("resolve_xmx_ownership", appid, choice, mutation=True)
+
     async def get_xmx_logs(self, appid):
         return await self._xmx_call("get_xmx_logs", appid)
 

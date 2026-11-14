@@ -493,6 +493,18 @@ assert entry['exists'] and entry['text'] == 'PRIVATE ROOT-ONLY LOG', entry
         self.assertIn('export XESS=latest\n', config)
         self.assertNotIn('export FSR=xess\n', config)
 
+    def test_sdk_latest_alone_without_bridge(self):
+        self.variant()
+        plan = self.manager.plan_xmx('1817230', str(self.package), '',
+                                     profile={**PROFILE, 'bridge': 0, 'sdk_latest': True})
+        self.assertTrue(plan['ok'], plan)
+        self.assertTrue(self.manager.apply_xmx('1817230', plan['plan_id'])['ok'])
+        self.assertTrue(self.manager.finish_xmx('1817230', plan['plan_id'], plan['desired_launch_options'])['ok'])
+        config = (self.manager._app('1817230')/'xess.conf').read_text()
+        self.assertIn('export XESS=latest\n', config)
+        self.assertNotIn('export FSR', config)
+        self.assertIs(self.manager.get_xmx_status('1817230')['profile']['sdk_latest'], True)
+
     def test_bridge_off_writes_no_route_lines(self):
         self.variant()
         plan = self.manager.plan_xmx('1817230', str(self.package), '', profile=PROFILE)

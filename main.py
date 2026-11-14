@@ -142,6 +142,9 @@ class Plugin:
                           action: str = "abort") -> dict:
         return await self._xmx_rpc("recover_xmx", appid, plan_id, launch_options, action)
 
+    async def resolve_xmx_ownership(self, appid: str, choice: str) -> dict:
+        return await self._xmx_rpc("resolve_xmx_ownership", appid, choice)
+
     async def nuke_plan_xmx(self, appid: str, package_dir: str = "") -> dict:
         return await self._xmx_rpc("nuke_plan_xmx", appid, package_dir)
 

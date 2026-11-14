@@ -25,11 +25,24 @@ _UNGUARDED = object()
 _MISSING = object()
 
 
+class OwnershipConflict(ValueError):
+    """A managed file no longer matches its sealed snapshot. Carries the
+    actionable identity of every drift so the UI can offer remediation."""
+
+    def __init__(self, conflicts):
+        self.conflicts = conflicts
+        extra = f' (+{len(conflicts) - 1} more)' if len(conflicts) > 1 else ''
+        super().__init__(f'Owned file conflict: {conflicts[0]["target"]}{extra}')
+
+
 def api(method):
     @wraps(method)
     def call(self, *args, **kwargs):
         try:
             return method(self, *args, **kwargs)
+        except OwnershipConflict as exc:
+            return {'ok': False, 'error': str(exc), 'conflicts': exc.conflicts,
+                    'remediation': ['restore', 'adopt']}
         except Exception as exc:
             return {'ok': False, 'error': str(exc)}
     return call
@@ -529,7 +542,10 @@ class Manager:
                 elif launch_options != previous['desired_launch_options']:
                     raise ValueError('Not enabled or launch options conflict; refusing to configure')
                 self._validate(previous, appid)
-                self._owned(previous['operations'])
+                if self._owned(previous['operations'], reseal=(app/'installed.json', previous)):
+                    previous, owner = self._installed_state(appid)
+                    if previous is None:
+                        raise ValueError('Installed ownership vanished during re-seal')
             elif previous:
                 raise ValueError('Already enabled; disable first')
             if not self._native_xess(appid)['found']:
@@ -639,13 +655,84 @@ class Manager:
                                 'after_sha256': item['installed_sha256']}
                                for item in operations]}
 
+    @api
+    def resolve_xmx_ownership(self, appid, choice):
+        """Immediate remediation for an ownership conflict on a settled
+        install: 'restore' forces the plugin's own bytes back, 'adopt'
+        records a third party's rebuilt file as the new sealed reality
+        (keeping the original payload for a later restore)."""
+        if choice not in ('restore', 'adopt'):
+            raise ValueError('Ownership remediation must be restore or adopt')
+        with self._lock():
+            app = self._app(appid)
+            installed, _owner = self._installed_state(appid)
+            if not installed:
+                raise ValueError('Not enabled; there is no ownership to resolve')
+            self._validate(installed, appid)
+            user = self.home.stat()
+            pending, drifted = [], []
+            for item in installed['operations']:
+                current = snapshot(item['target'])
+                if self._matches_owned(item, current):
+                    # An adopted file stays ours on disk yet may differ from
+                    # the payload the plugin wrote; keep it restorable.
+                    if item.get('plugin_data') and current and hashlib.sha256(
+                            base64.b64decode(item['plugin_data'])
+                    ).hexdigest() != current['sha256']:
+                        pending.append((item, current))
+                    continue
+                if self._metadata_drift(item, current):
+                    item['installed'] = current
+                    drifted.append(item['target'])
+                    continue
+                pending.append((item, current))
+            if not pending and not drifted:
+                raise ValueError('No ownership conflict to resolve')
+            resolved = []
+            for item, current in pending:
+                target = item['target']
+                if choice == 'restore':
+                    payload = base64.b64decode(item.get('plugin_data') or item['data'])
+                    self._atomic(target, payload, item['mode'], expected=current)
+                    fresh = snapshot(target)
+                    if fresh is None or fresh['sha256'] != hashlib.sha256(payload).hexdigest():
+                        raise ValueError(f'Restored file failed verification: {target}')
+                    item['data'] = base64.b64encode(payload).decode()
+                    item['installed_sha256'] = fresh['sha256']
+                    item['installed'] = fresh
+                    item.pop('plugin_data', None)
+                else:
+                    conflict = [{'target': target,
+                                 'expected_sha256': item.get('installed_sha256'),
+                                 'current_sha256': current['sha256'] if current else None}]
+                    # Adopting is only ever about a file we can legitimately
+                    # own: regular, our uid, the journal's recorded mode.
+                    if (current is None or current['mode'] != item['mode'] or
+                            current['uid'] != user.st_uid):
+                        raise OwnershipConflict(conflict)
+                    with regular_file(target) as source:
+                        payload = source.read()
+                    item.setdefault('plugin_data', item['data'])
+                    item['data'] = base64.b64encode(payload).decode()
+                    item['installed_sha256'] = current['sha256']
+                    item['installed'] = current
+                resolved.append(target)
+            # The seal must hold over the recorded reality, not the wish.
+            self._validate(installed, appid)
+            self._save(app/'installed.json', installed)
+            return {'ok': True, 'choice': choice, 'resolved': resolved,
+                    'metadata_resealed': drifted}
+
     def _plan_disable(self, appid, prefix, launch_options):
         app = self._app(appid)
         installed, owner = self._installed_state(appid)
         if not installed or launch_options != installed['desired_launch_options']:
             raise ValueError('Not enabled or launch options conflict; refusing to restore')
         self._validate(installed, appid)
-        self._owned(installed['operations'])
+        if self._owned(installed['operations'], reseal=(app/'installed.json', installed)):
+            installed, owner = self._installed_state(appid)
+            if installed is None:
+                raise ValueError('Installed ownership vanished during re-seal')
         plan = dict(installed, generation=self._generation(app), action='disable',
                     installed_owner=owner,
                     phase='planned', plan_id=uuid.uuid4().hex,
@@ -677,14 +764,42 @@ class Manager:
         # Matching bytes alone cannot prove that an unstarted target is ours.
         return bool(item.get('installed')) and same(current, item['installed'])
 
-    def _owned(self, operations):
+    def _metadata_drift(self, item, current):
+        # A game launch makes Proton re-extract the driver-store INF or simply
+        # re-read our files: same bytes, fresh timestamps. That is bookkeeping,
+        # not tampering: identity (sha, mode, uid, gid, xattrs) must still be
+        # exactly what we sealed; only atime/mtime may differ.
+        record = item.get('installed')
+        return bool(current and record and
+                    item.get('installed_sha256') == current['sha256'] == record['sha256'] and
+                    current['mode'] == record['mode'] and
+                    current['uid'] == record['uid'] and
+                    current['gid'] == record['gid'] and
+                    current['xattrs'] == record['xattrs'])
+
+    def _owned(self, operations, reseal=None):
+        conflicts, dirty = [], False
         for item in operations:
             current = snapshot(item['target'])
             if not self._matches_owned(item, current):
-                raise ValueError(f'Owned file conflict: {item["target"]}')
+                if self._metadata_drift(item, current):
+                    item['installed'] = current
+                    dirty = True
+                    continue
+                conflicts.append({'target': item['target'],
+                                  'expected_sha256': item.get('installed_sha256'),
+                                  'current_sha256': current['sha256'] if current else None})
+                continue
             if item.get('backup') and (not Path(item['backup']).is_file() or
-                                      digest(item['backup']) != item['old']['sha256']):
+                                       digest(item['backup']) != item['old']['sha256']):
                 raise ValueError(f'Backup conflict: {item["backup"]}')
+        # Record reality even when a real conflict still refuses the operation;
+        # the next attempt must not lose the fresh snapshot behind the error.
+        if dirty and reseal is not None:
+            self._save(reseal[0], reseal[1])
+        if conflicts:
+            raise OwnershipConflict(conflicts)
+        return dirty
 
     def _clean_temps(self, journal):
         candidates = []
@@ -1579,7 +1694,8 @@ class Manager:
             if process['name'] == 'sshd-session':
                 username = pwd.getpwuid(self.home.stat().st_uid).pw_name
                 if not (len(process['args']) == 1 and re.fullmatch(
-                        'sshd-session: '+re.escape(username)+r'@(?:notty|pts/[0-9]+)', process['args'][0])
+                        'sshd-session: '+re.escape(username)+r'(?:@(?:notty|pts/[0-9]+))?',
+                        process['args'][0])
                         and process['exe'] in (None, '/usr/libexec/openssh/sshd-session', '/usr/lib/ssh/sshd-session')
                         and re.fullmatch(r'/user.slice/user-'+str(self.home.stat().st_uid)+
                                          r'.slice/session-[0-9]+.scope', process['group'])
@@ -1617,8 +1733,36 @@ class Manager:
             except PermissionError as exc:
                 if self._known_host_process(entry):
                     continue
-                raise ValueError('Cannot establish that the game is stopped: '
-                                 f'process {entry.name} environment unreadable and host identity unproven') from exc
+                # Steam-launched game processes are dumpable by construction
+                # (their SteamAppId/WINEPREFIX is how we read them). An
+                # undumpable same-uid process is therefore judged by provable
+                # affinity, never by an allowlist of host-service titles.
+                try:
+                    command = (entry/'cmdline').read_bytes()
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+                except OSError:
+                    raise ValueError('Cannot establish that the game is stopped: '
+                                     f'process {entry.name} has an unreadable '
+                                     'environment and command line') from exc
+                decoded = os.fsdecode(command).replace('\0', ' ').strip()
+                affines = (f'/compatdata/{appid}/', str(prefix))
+                tokens = decoded.split()
+                if (any(needle and needle in decoded for needle in affines)
+                        or any(token in ('wine', 'wineserver', 'winewineserver',
+                                         'steam-runtime-launch-client') for token in tokens)):
+                    name = 'unknown'
+                    try:
+                        for line in (entry/'status').read_text().splitlines():
+                            if line.startswith('Name:'):
+                                name = line.split(':', 1)[1].strip()
+                                break
+                    except OSError:
+                        pass
+                    raise ValueError('Cannot establish that the game is stopped: '
+                                     f'process {entry.name} ({name} "{decoded[:120]}") has an '
+                                     'unreadable environment and a game-related command line') from exc
+                continue
             if any(environment.get(key) == appid.encode() for key in (b'SteamAppId', b'SteamGameId')):
                 raise ValueError('Game is running; stop it before changing its prefix')
             for key, expected in ((b'WINEPREFIX', prefix), (b'STEAM_COMPAT_DATA_PATH', prefix.parent)):

@@ -65,6 +65,7 @@ export const planXmx = callable<[appid: string, packageDir: string, launchOption
 export const applyXmx = callable<[appid: string, planId: string], XmxApply>("apply_xmx");
 export const finishXmx = callable<[appid: string, planId: string, launchOptions: string], XmxResult>("finish_xmx");
 export const recoverXmx = callable<[appid: string, planId: string, launchOptions: string, action: "abort"], XmxResult>("recover_xmx");
+export const resolveXmxOwnership = callable<[appid: string, choice: "restore" | "adopt"], XmxResult>("resolve_xmx_ownership");
 
 export interface XmxNukeFile { target: string; action: "remove" | "restore" | "leave"; reason?: string }
 export interface XmxNukePlan extends XmxResult {

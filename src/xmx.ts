@@ -29,8 +29,21 @@ export interface XmxResult {
   ok: boolean;
   error?: string;
 }
+export interface XmxOwnershipConflict {
+  target: string;
+  expected_sha256: string | null;
+  current_sha256: string | null;
+}
+export function isOwnershipConflictList(value: unknown): value is XmxOwnershipConflict[] {
+  return Array.isArray(value) && value.length > 0 && value.every(item => Boolean(item) && typeof item === "object"
+    && typeof (item as XmxOwnershipConflict).target === "string"
+    && [(item as XmxOwnershipConflict).expected_sha256, (item as XmxOwnershipConflict).current_sha256]
+      .every(sha => sha === null || (typeof sha === "string" && /^[0-9a-f]{64}$/.test(sha))));
+}
 export interface XmxPlan extends XmxResult {
   plan_id: string;
+  conflicts?: XmxOwnershipConflict[];
+  remediation?: string[];
   old_launch_options: string;
   desired_launch_options: string;
   operations: unknown[];
@@ -66,6 +79,7 @@ export interface XmxDependencies {
   apply(appid: string, planId: string): Promise<XmxApply>;
   finish(appid: string, planId: string, options: string): Promise<XmxResult>;
   recover?(appid: string, planId: string, options: string, action: "abort"): Promise<XmxResult>;
+  resolve?(appid: string, choice: "restore" | "adopt"): Promise<XmxResult>;
 }
 export interface XmxState {
   busy: boolean;
@@ -77,13 +91,15 @@ export interface XmxState {
   needsRefresh: boolean;
   recoveryBlocked: boolean;
   success: boolean;
+  /** Ownership drift from a preview failure: the panel offers restore/adopt next to it. */
+  conflicts: XmxOwnershipConflict[] | null;
 }
 
 export class XmxController {
   state: XmxState = {
     busy: false, error: null, preview: null, pending: null,
     pendingReady: false, pendingAbortable: false, needsRefresh: false,
-    recoveryBlocked: false, success: false,
+    recoveryBlocked: false, success: false, conflicts: null,
   };
 
   private active = true;
@@ -100,7 +116,7 @@ export class XmxController {
         this.state.recoveryBlocked = false;
         this.state.pending = null;
         this.state.pendingReady = false;
-        this.state.error = null;
+        this.state.error = null; this.state.conflicts = null;
       }
       return;
     }
@@ -159,7 +175,7 @@ export class XmxController {
     if (!plan || (expectedPlanId !== undefined && expectedPlanId !== plan.plan_id)
       || this.state.busy || this.state.pending || this.state.needsRefresh || this.state.recoveryBlocked) return;
     this.state.busy = true;
-    this.state.error = null;
+    this.state.error = null; this.state.conflicts = null;
     try {
       this.guard();
       const options = await this.dependencies.readLive(this.appid);
@@ -194,7 +210,7 @@ export class XmxController {
   async resume() {
     if (this.state.busy || this.state.needsRefresh || !this.state.pending || !this.state.pendingReady) return;
     this.state.busy = true;
-    this.state.error = null;
+    this.state.error = null; this.state.conflicts = null;
     try {
       await this.completeLaunch(this.state.pending);
     } catch (error) {
@@ -209,7 +225,7 @@ export class XmxController {
     const plan = this.state.pending;
     if (this.state.busy || this.state.needsRefresh || !this.state.pendingAbortable || !plan || !this.dependencies.recover) return;
     this.state.busy = true;
-    this.state.error = null;
+    this.state.error = null; this.state.conflicts = null;
     try {
       this.guard();
       const options = await this.dependencies.readLive(this.appid);
@@ -259,7 +275,7 @@ export class XmxController {
   async preview(packageDir: string, action: XmxAction, profile?: XmxProfile) {
     if (this.state.busy || this.state.pending || this.state.recoveryBlocked) return;
     this.state.busy = true;
-    this.state.error = null;
+    this.state.error = null; this.state.conflicts = null;
     this.state.preview = null;
     this.state.success = false;
     try {
@@ -272,9 +288,28 @@ export class XmxController {
         : this.dependencies.plan(this.appid, packageDir, options, action, { ...profile }));
       this.guard();
       if (!isXmxPlan(plan) || plan.old_launch_options !== options) {
+        this.state.conflicts = isOwnershipConflictList(plan?.conflicts) ? plan.conflicts : null;
         throw new Error(plan?.error || "Invalid preview or different live launch options. Nothing was applied.");
       }
       this.state.preview = { ...plan, action };
+    } catch (error) {
+      this.state.error = String(error);
+    } finally {
+      this.state.busy = false;
+    }
+  }
+
+  /** Act on an ownership conflict: force our bytes back, or adopt what the
+   *  game/Proton rebuilt. Either way the backend journal follows reality. */
+  async remediate(choice: "restore" | "adopt") {
+    if (this.state.busy || this.state.pending || !this.dependencies.resolve) return;
+    this.state.busy = true;
+    try {
+      this.guard();
+      const result = await this.dependencies.resolve(this.appid, choice);
+      if (result?.ok !== true) throw new Error(result?.error || "Ownership remediation failed; nothing else was changed.");
+      this.state.error = null; this.state.conflicts = null;
+      this.state.needsRefresh = true;
     } catch (error) {
       this.state.error = String(error);
     } finally {

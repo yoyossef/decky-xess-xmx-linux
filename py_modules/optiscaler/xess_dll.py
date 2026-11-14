@@ -277,7 +277,10 @@ class DllManager(Manager):
                 self._validate(installed, appid)
                 if installed['operations'][0]['target'] != str(target):
                     raise ValueError('Restore target conflicts with the owned DLL')
-                self._owned(installed['operations'])
+                if self._owned(installed['operations'], reseal=(app/'installed.json', installed)):
+                    installed, owner = self._installed_state(appid)
+                    if installed is None:
+                        raise ValueError('Installed ownership vanished during re-seal')
                 plan = dict(installed, action=action, phase='planned', plan_id=token,
                             generation=self._generation(app), old_launch_options=launch_options,
                             desired_launch_options=launch_options,
