@@ -332,5 +332,122 @@ class BridgeTests(unittest.TestCase):
             xmx_bridge.user_command('someone-else', ['true'], self.home)
 
 
+
+
+HOOK_BLOCK = ('# xess-xmx proton hook - written by install.sh\n'
+              'import os as _os\n'
+              '_h = "{pkg}/tools/proton-hook.py"\n'
+              'if _os.path.isfile(_h):\n'
+              '    exec(open(_h).read())\n'
+              '_u = _os.path.join(_os.path.dirname(_h), "user_settings.user.py")\n'
+              'if _os.path.isfile(_u):\n'
+              '    exec(open(_u).read())\n')
+
+
+class RetargetTests(unittest.TestCase):
+    """After a package update the hook lines and units must follow the CURRENT
+    package; silently running the old proton-hook.py is a degraded no-signal
+    state the user must never see."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name)/'home'
+        self.home.mkdir()
+        self.proton = self.home/'.local/share/Steam/steamapps/common/Proton-GE9'
+        self.proton.mkdir(parents=True)
+        (self.proton/'proton').write_text('#!/bin/sh\n')
+        self.old = self.home/'xess-xmx-linux-OLDTAG'
+        self.old.mkdir()
+        self.new = self.home/PKG_NAME
+        (self.new/'tools').mkdir(parents=True)
+        units = self.home/'.config/systemd/user'
+        units.mkdir(parents=True)
+        (self.proton/'user_settings.py').write_text(
+            HOOK_BLOCK.format(pkg=self.old) + '\n# USER CONFIG stays last\n')
+        plain = self.home/'.local/share/Steam/steamapps/common/Proton-Plain'
+        plain.mkdir(parents=True)
+        (plain/'proton').write_text('#!/bin/sh\n')
+        (plain/'user_settings.py').write_text('# my own proton tweaks\n')
+        self.check_unit = units/'xess-xmx-check.service'
+        self.check_unit.write_text(
+            '[Unit]\nConditionPathExists=%s/install.sh\n'
+            '[Service]\nExecStart=/bin/bash "%s/install.sh"\n' % (self.old, self.old))
+        self.shim_unit = units/'xess-xmx-shim.service'
+        self.shim_unit.write_text('[Service]\nExecStart=/bin/bash "%s/install.sh"\n' % self.old)
+        self.path_unit = units/'xess-xmx-shim.path'
+        self.path_unit.write_text('[Path]\nPathExists=/somewhere/else\n')
+        self.plain_file = plain/'user_settings.py'
+        self.plain_before = self.plain_file.read_text()
+        self.path_before = self.path_unit.read_text()
+        self.calls = []
+
+        def run(argv, cwd=None, timeout=None):
+            self.calls.append([str(a) for a in argv])
+            return {'rc': 0, 'out': ''}
+        self.run = run
+        self.manager = xmx.Manager(self.home, self.home/'.settings')
+
+    def tearDown(self):
+        for d in (self.proton, self.home/'.local/share/Steam/steamapps/common/Proton-Plain'):
+            os.chmod(d, 0o755)
+        self._tmp.cleanup()
+
+    def journal(self):
+        path = self.manager.root/xmx_bridge.JOURNAL
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def test_retarget_follows_the_new_package(self):
+        result = xmx_bridge.retarget(self.manager, str(self.new), run=self.run)
+        self.assertTrue(result['ok'], result)
+        hook = (self.proton/'user_settings.py').read_text()
+        self.assertIn(str(self.new/'tools'/'proton-hook.py'), hook)
+        self.assertNotIn(str(self.old), hook)
+        self.assertIn('# xess-xmx proton hook - written by install.sh', hook)
+        self.assertIn('# USER CONFIG stays last', hook, 'anything after the block is the user\'s')
+        self.assertEqual(self.plain_file.read_text(), self.plain_before,
+                         'files without the marker are not ours to touch')
+        for unit in (self.check_unit, self.shim_unit):
+            self.assertIn(str(self.new), unit.read_text())
+            self.assertNotIn(str(self.old), unit.read_text())
+        self.assertEqual(self.path_unit.read_text(), self.path_before,
+                         'a unit without package paths must not change')
+        self.assertTrue(any(a[:2] == ['systemctl', '--user'] and 'daemon-reload' in a
+                            for a in self.calls))
+        entries = [e for e in self.journal() if e['step'] == 'retarget']
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]['to'], PKG_NAME)
+        self.assertEqual(entries[0]['hooked'], ['Proton-GE9'])
+        self.assertIn('xess-xmx-check.service', entries[0]['units'])
+
+    def test_retarget_is_a_noop_without_our_artifacts(self):
+        (self.proton/'user_settings.py').unlink()
+        self.check_unit.unlink()
+        self.shim_unit.unlink()
+        result = xmx_bridge.retarget(self.manager, str(self.new), run=self.run)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['hooked'], [])
+        self.assertEqual(result['units'], [])
+        self.assertEqual(self.calls, [], 'systemctl must not run for nothing')
+        self.assertEqual(self.journal(), [])
+
+    def test_unwritable_proton_is_reported_not_forced(self):
+        os.chmod(self.proton, 0o555)
+        result = xmx_bridge.retarget(self.manager, str(self.new), run=self.run)
+        self.assertTrue(result['ok'], 'one unwritable Proton must not fail the whole retarget')
+        self.assertEqual(result['hooked'], [])
+        self.assertEqual([str(self.proton)], result['unwritable'])
+        self.assertIn(str(self.new), self.check_unit.read_text(),
+                      'the units still follow the new package')
+
+    def test_retarget_same_package_writes_nothing(self):
+        (self.proton/'user_settings.py').write_text(HOOK_BLOCK.format(pkg=self.new))
+        for unit in (self.check_unit, self.shim_unit):
+            unit.write_text(unit.read_text().replace(str(self.old), str(self.new)))
+        result = xmx_bridge.retarget(self.manager, str(self.new), run=self.run)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['hooked'], [])
+        self.assertEqual(self.calls, [])
+
+
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    unittest.main()

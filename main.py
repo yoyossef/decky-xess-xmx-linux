@@ -102,6 +102,12 @@ class Plugin:
     async def prepare_xmx_package(self) -> dict:
         return await self._xmx_rpc("prepare_xmx_package")
 
+    async def plan_cleanup_packages(self) -> dict:
+        return await self._xmx_rpc("plan_cleanup_packages")
+
+    async def apply_cleanup_packages(self, token: str) -> dict:
+        return await self._xmx_rpc("apply_cleanup_packages", token)
+
     async def check_xmx_package_upstream(self) -> dict:
         return await self._xmx_rpc("check_xmx_package_upstream")
 

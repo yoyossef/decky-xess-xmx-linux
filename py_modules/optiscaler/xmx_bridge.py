@@ -399,6 +399,77 @@ def install(manager, *, run=None):
             'session_conf': 'parked', 'out': (result.get('out') or '')[-2000:]}
 
 
+PKG_DIR_RE = re.compile(r'/[^\s"\']*xess-xmx-linux-[^/\s"\']*')
+
+
+def _replace_file(path, text):
+    tmp = Path(str(path) + '.xmx-tmp')
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def retarget(manager, package_path, *, run=None):
+    """Make the installed Proton hooks and xess-xmx units follow a new package.
+
+    install.sh embeds the package's absolute paths in files that live OUTSIDE
+    the package: the hook line in each Proton's user_settings.py and the
+    ExecStart lines of the xess-xmx systemd user units. A package update would
+    otherwise keep running the OLD package's proton-hook.py next to the new
+    layer (stale SDK libraries, an extension merge that does not know the
+    newest fixes) while _hooks() still reports green, because the old folder
+    was never deleted. Only files carrying our own marker are rewritten,
+    atomically; unwritable Protons are reported, never forced.
+    """
+    run = run or (lambda argv, cwd=None, timeout=None: _default_run(manager, argv, cwd, timeout))
+    package = os.path.abspath(str(package_path))
+    hook = os.path.join(package, 'tools', 'proton-hook.py')
+    hooked, units, unwritable = [], [], []
+    for folder in _protons(manager):
+        upath = folder/'user_settings.py'
+        try:
+            text = upath.read_text()
+        except OSError:
+            continue
+        if HOOK_MARK not in text:
+            continue
+        match = HOOK_SCRIPT_RE.search(text)
+        if not match or match.group(1) == hook:
+            continue
+        try:
+            _replace_file(upath, text[:match.start(1)] + hook + text[match.end(1):])
+        except OSError:
+            unwritable.append(str(folder))
+            continue
+        hooked.append(folder.name)
+    unit_dir = Path(manager.home)/'.config/systemd/user'
+    if unit_dir.is_dir():
+        for unit in sorted(unit_dir.glob('xess-xmx-*')):
+            if not unit.is_file():
+                continue
+            try:
+                text = unit.read_text()
+            except OSError:
+                continue
+            if '/xess-xmx-linux-' not in text:
+                continue
+            new = PKG_DIR_RE.sub(package, text)
+            if new == text:
+                continue
+            try:
+                _replace_file(unit, new)
+            except OSError:
+                unwritable.append(unit.name)
+                continue
+            units.append(unit.name)
+    result = {'ok': True, 'hooked': hooked, 'units': units, 'unwritable': unwritable}
+    if units:
+        result['systemd'] = run(['systemctl', '--user', 'daemon-reload'], timeout=30).get('rc')
+    if hooked or units or unwritable:
+        _journal(manager, 'retarget', to=os.path.basename(package),
+                 hooked=hooked, units=units, unwritable=unwritable)
+    return result
+
+
 def uninstall(manager, confirm, *, run=None):
     """Undo: refuse while any game is bridged, then upstream uninstall.sh."""
     run = run or (lambda argv, cwd=None, timeout=None: _default_run(manager, argv, cwd, timeout))

@@ -85,7 +85,7 @@ REPO = 'HHHHanasak1/xess-xmx-linux'
 LATEST_URL = f'https://api.github.com/repos/{REPO}/releases/latest'
 # Release validated against this plugin build. prepare() downloads ONLY this
 # tag; bump it (plus tests + release) after validating a new upstream tag.
-PINNED_TAG = '20261113'
+PINNED_TAG = '20261115'
 PINNED_URL = f'https://api.github.com/repos/{REPO}/releases/tags/{PINNED_TAG}'
 MAX_ARCHIVE = 128 * 1024 * 1024
 
@@ -906,3 +906,130 @@ def prepare(manager, *, cancel=None):
     except Exception as exc:
         return {**state, 'pinned': PINNED_TAG, 'state': 'error', 'error': str(exc)[:2048]}
 
+
+
+CLEANUP_RE = re.compile(r'^xess-xmx-linux-[A-Za-z0-9][A-Za-z0-9_.-]{0,63}-[0-9a-f]{12}-[0-9a-f]{12}$')
+CLEANUP_JOURNAL = 'package-journal.jsonl'
+
+
+def _dir_size(path):
+    total = 0
+    for root, dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def _package_dirs(manager):
+    """package_dir of every installed game record; unreadable record = refuse all.
+
+    A record we cannot read may be referencing any folder, and cleanup must
+    never guess its way past a live game's package.
+    """
+    refs = {}
+    apps = manager.root/'apps'
+    if not apps.is_dir():
+        return refs
+    for record in sorted(apps.glob('*/installed.json')):
+        try:
+            data = record.read_bytes()
+        except OSError as exc:
+            raise ValueError('Installed game record unreadable: '+str(record)) from exc
+        try:
+            text = data.decode('utf-8')
+        except UnicodeDecodeError as exc:
+            raise ValueError('Installed game record unreadable: '+str(record)) from exc
+        for match in re.finditer(r'"package_dir": ?"([^"]+)"', text):
+            refs.setdefault(match.group(1), []).append(record.parent.name)
+    return refs
+
+
+def cleanup_plan(manager):
+    """Preview which stale prepared folders an explicit cleanup would remove.
+
+    Candidates are only our own versioned folders (name grammar + ownership
+    receipt) directly under HOME, never a symlink. Kept entries carry a
+    reason so the UI can explain every folder that stays behind.
+    """
+    state = _state(manager)
+    if state['state'] == 'preparing':
+        return {'ok': False, 'error': 'A package preparation is running; try again after it finishes.',
+                'candidates': [], 'kept': [], 'token': None}
+    protected = {}
+    if state.get('package') and state['package'].get('path'):
+        protected[os.path.abspath(state['package']['path'])] = 'selected package'
+    for path, appids in _package_dirs(manager).items():
+        protected.setdefault(os.path.abspath(path), 'used by game ' + ', '.join(sorted(appids)[:3]))
+    candidates, kept = [], []
+    try:
+        entries = sorted(os.listdir(manager.home))
+    except OSError as exc:
+        raise ValueError('Home directory unreadable: '+str(exc))
+    for name in entries:
+        if not CLEANUP_RE.fullmatch(name):
+            continue
+        path = manager.home/name
+        full = os.path.abspath(str(path))
+        try:
+            info = os.lstat(path)
+        except OSError:
+            continue
+        if not stat.S_ISDIR(info.st_mode):
+            continue
+        if path.is_symlink():
+            kept.append({'path': str(path), 'reason': 'not a real folder (symlink)'})
+            continue
+        if full in protected:
+            kept.append({'path': str(path), 'reason': protected[full]})
+            continue
+        try:
+            receipt = json.loads((path/RECEIPT).read_bytes()[:65536])
+        except (OSError, ValueError):
+            receipt = None
+        if not isinstance(receipt, dict) or receipt.get('provider') != PROVIDER:
+            kept.append({'path': str(path), 'reason': 'not owned by this plugin'})
+            continue
+        candidates.append({'path': str(path), 'tag': receipt.get('tag'),
+                           'size_bytes': _dir_size(path)})
+    token = hashlib.sha256('\n'.join(c['path'] for c in candidates).encode()).hexdigest()
+    return {'ok': True, 'error': None, 'candidates': candidates, 'kept': kept,
+            'token': token if candidates else None}
+
+
+def cleanup_apply(manager, token):
+    """Delete exactly the previewed folders; anything changed since the plan = refuse."""
+    plan = cleanup_plan(manager)
+    if not plan['ok']:
+        return plan
+    if not plan['candidates']:
+        return {'ok': True, 'removed': [], 'errors': []}
+    if not isinstance(token, str) or token != plan['token']:
+        return {'ok': False, 'removed': [], 'errors': [],
+                'error': 'The package folders changed since this preview; preview again.'}
+    removed, errors = [], []
+    still_protected = set(_package_dirs(manager))
+    state = _state(manager)
+    if state.get('package') and state['package'].get('path'):
+        still_protected.add(os.path.abspath(state['package']['path']))
+    for candidate in plan['candidates']:
+        path = Path(candidate['path'])
+        # Final re-check per folder: grammar, real directory, still not protected.
+        if (not CLEANUP_RE.fullmatch(path.name) or path.is_symlink() or not path.is_dir()
+                or os.path.abspath(str(path)) in
+                {os.path.abspath(p) for p in still_protected}):
+            errors.append('refused (changed): '+str(path))
+            continue
+        try:
+            shutil.rmtree(path)
+            removed.append(str(path))
+        except OSError as exc:
+            errors.append(str(path)+': '+str(exc)[:200])
+    entry = {'step': 'cleanup', 'removed': removed, 'errors': errors,
+             'time': time.strftime('%Y-%m-%dT%H:%M:%S')}
+    with open(manager.root/CLEANUP_JOURNAL, 'a') as journal:
+        journal.write(json.dumps(entry)+'\n')
+    return {'ok': not errors, 'removed': removed, 'errors': errors,
+            **({'error': 'Some folders could not be removed; see the list.'} if errors else {})}

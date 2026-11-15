@@ -170,6 +170,16 @@ export function packagePinnedTag(value: unknown): string | null {
   return typeof pinned === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(pinned) ? pinned : null;
 }
 export const prepareXmxPackage = callable<[], XmxPackageStatus | XmxResult>("prepare_xmx_package");
+export interface XmxCleanupPlan {
+  ok: true;
+  error: string | null;
+  candidates: Array<{ path: string; tag: string | null; size_bytes: number }>;
+  kept: Array<{ path: string; reason: string }>;
+  token: string | null;
+}
+export interface XmxCleanupResult { ok: boolean; removed: string[]; errors: string[]; error?: string; }
+export const planCleanupPackages = callable<[], XmxCleanupPlan | XmxResult>("plan_cleanup_packages");
+export const applyCleanupPackages = callable<[token: string], XmxCleanupResult | XmxResult>("apply_cleanup_packages");
 export interface XmxUpstreamCheck {
   ok: true;
   available: boolean;

@@ -495,6 +495,16 @@ class OptiScalerService:
         from . import xmx_package
         return await self._xmx_call(xmx_package.check_upstream, self.xmx)
 
+    async def plan_cleanup_packages(self):
+        """Preview stale prepared package folders an explicit cleanup would remove."""
+        from . import xmx_package
+        return await self._xmx_call(xmx_package.cleanup_plan, self.xmx)
+
+    async def apply_cleanup_packages(self, token):
+        """Delete exactly the previewed folders under a binding preview token."""
+        from . import xmx_package
+        return await self._xmx_call(xmx_package.cleanup_apply, self.xmx, token, mutation=True)
+
     async def get_fsr_bridge_state(self):
         """FSR->XeSS bridge state: package, hooks, parked session file, units."""
         from . import xmx_bridge
@@ -533,7 +543,17 @@ class OptiScalerService:
         cancel = threading.Event()
         def prepare():
             try:
-                return xmx_package.prepare(self.xmx, cancel=cancel)
+                result = xmx_package.prepare(self.xmx, cancel=cancel)
+                if result.get('ok') and (result.get('package') or {}).get('path'):
+                    # Hooks and units live outside the package and embed its
+                    # path; they must follow it, silently and journal-logged.
+                    from . import xmx_bridge
+                    try:
+                        result['retarget'] = xmx_bridge.retarget(
+                            self.xmx, result['package']['path'])
+                    except Exception as exc:
+                        result['retarget'] = {'ok': False, 'error': str(exc)[:500]}
+                return result
             except Exception as exc:
                 return {"ok": False, "state": "error", "package": None,
                         "latest": None, "error": str(exc)[:2048]}

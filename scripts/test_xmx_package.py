@@ -783,5 +783,117 @@ class PackageTests(unittest.TestCase):
         with patch.object(self.pkg, 'prepare', side_effect=prepare): asyncio.run(run())
 
 
+
+
+class CleanupTests(unittest.TestCase):
+    """"Remove old package copies": explicit cleanup of stale prepared folders.
+
+    The plugin never deletes a folder on its own, but the user asked for a
+    button; guards: only our own versioned folders directly under HOME, never
+    the prepared/selected one, never one referenced by an installed game, and
+    nothing while preparation runs or the record set changed under us.
+    """
+
+    def setUp(self):
+        self.pkg = importlib.import_module('optiscaler.xmx_package')
+        self.temp = tempfile.TemporaryDirectory(prefix='xmx-cleanup-tests-', dir=os.environ['TMPDIR'])
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.home = self.root/'home'
+        self.home.mkdir()
+        self.manager = importlib.import_module('optiscaler.xmx').Manager(self.home, self.root/'settings')
+
+    def folder(self, name, owned=True, size=4096):
+        d = self.home/name
+        d.mkdir()
+        (d/'file.bin').write_bytes(b'x'*size)
+        if owned:
+            (d/'.decky-xmx-package.json').write_text(json.dumps(
+                {'provider': self.pkg.PROVIDER, 'schema': 1, 'tag': name.split('-')[3],
+                 'archive_sha256': '0'*64, 'path': str(d), 'runtime_verified': False,
+                 'tree_sha256': '1'*64}))
+        return d
+
+    def enable_game(self, appid, package_dir):
+        app = self.manager.root/'apps'/str(appid)
+        app.mkdir(parents=True)
+        (app/'installed.json').write_text(json.dumps(
+            {'operations': [{'package_dir': str(package_dir)}]}))
+
+    def seed_state(self, package_path, tag):
+        self.manager.root.mkdir(parents=True, exist_ok=True)
+        (self.manager.root/self.pkg.STATE_FILE).write_text(json.dumps(
+            {'provider': self.pkg.PROVIDER, 'schema': 1, 'state': 'ready',
+             'package': {'tag': tag, 'path': str(package_path),
+                         'archive_sha256': '0'*64, 'runtime_verified': False},
+             'latest': None}))
+
+    def test_plan_offers_only_foreign_owned_versioned_folders(self):
+        current = self.folder('xess-xmx-linux-20261115-'+'a'*12+'-'+'1'*12)
+        old1 = self.folder('xess-xmx-linux-20261113-'+'b'*12+'-'+'2'*12)
+        old2 = self.folder('xess-xmx-linux-20261111-'+'c'*12+'-'+'3'*12)
+        self.seed_state(current, '20261115')
+        self.enable_game(4242, old2)
+        stranger = self.folder('xess-xmx-linux-20261109', owned=False)
+        symlink_target = self.root/'elsewhere'
+        symlink_target.mkdir()
+        (self.home/('xess-xmx-linux-20261101-'+'d'*12+'-'+'4'*12)).symlink_to(symlink_target)
+        plan = self.pkg.cleanup_plan(self.manager)
+        self.assertTrue(plan['ok'], plan)
+        self.assertEqual([c['path'] for c in plan['candidates']], [str(old1)])
+        self.assertIn(str(old2), json.dumps(plan['kept']))
+        self.assertIn(str(current), json.dumps(plan['kept']))
+        self.assertNotIn(str(stranger), json.dumps(plan))
+        kept_reasons = {k['path']: k['reason'] for k in plan['kept']}
+        self.assertIn('game', kept_reasons[str(old2)].lower())
+        self.assertIn(str(current), kept_reasons)
+        self.assertGreaterEqual(plan['candidates'][0]['size_bytes'], 4096)
+
+    def test_apply_deletes_listed_folders_only_and_journalizes(self):
+        current = self.folder('xess-xmx-linux-20261115-'+'a'*12+'-'+'1'*12)
+        old1 = self.folder('xess-xmx-linux-20261113-'+'b'*12+'-'+'2'*12)
+        self.seed_state(current, '20261115')
+        plan = self.pkg.cleanup_plan(self.manager)
+        result = self.pkg.cleanup_apply(self.manager, plan['token'])
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['removed'], [str(old1)])
+        self.assertFalse(old1.exists())
+        self.assertTrue(current.exists())
+        entries = [json.loads(line) for line in
+                   (self.manager.root/'package-journal.jsonl').read_text().splitlines()]
+        self.assertEqual(entries[-1]['step'], 'cleanup')
+        self.assertEqual(entries[-1]['removed'], [str(old1)])
+
+    def test_apply_refuses_a_stale_token(self):
+        current = self.folder('xess-xmx-linux-20261115-'+'a'*12+'-'+'1'*12)
+        self.folder('xess-xmx-linux-20261113-'+'b'*12+'-'+'2'*12)
+        self.seed_state(current, '20261115')
+        plan = self.pkg.cleanup_plan(self.manager)
+        late = self.folder('xess-xmx-linux-20261112-'+'e'*12+'-'+'5'*12)
+        result = self.pkg.cleanup_apply(self.manager, plan['token'])
+        self.assertFalse(result['ok'])
+        self.assertIn('changed', result['error'].lower())
+        self.assertTrue(late.exists())
+
+    def test_apply_refuses_while_preparation_runs(self):
+        current = self.folder('xess-xmx-linux-20261115-'+'a'*12+'-'+'1'*12)
+        self.seed_state(current, '20261115')
+        (self.manager.root/self.pkg.STATE_FILE).write_text(json.dumps(
+            {'provider': self.pkg.PROVIDER, 'schema': 1, 'state': 'preparing',
+             'package': None, 'latest': None}))
+        result = self.pkg.cleanup_apply(self.manager, '0'*64)
+        self.assertFalse(result['ok'])
+        self.assertIn('preparation', result['error'].lower())
+
+    def test_unreadable_game_record_refuses_the_whole_plan(self):
+        current = self.folder('xess-xmx-linux-20261115-'+'a'*12+'-'+'1'*12)
+        self.seed_state(current, '20261115')
+        app = self.manager.root/'apps'/'99'
+        app.mkdir(parents=True)
+        (app/'installed.json').write_bytes(b'\x80\x81 broken')
+        with self.assertRaises(Exception):
+            self.pkg.cleanup_plan(self.manager)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

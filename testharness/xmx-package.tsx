@@ -14,6 +14,7 @@ const dllStatus = { ok: true, installed: false, phase: "disabled", pending: null
 const PINNED = "v20261104";
 const downloadLabel = `Download ${PINNED} (tested)`;
 const updateLabel = `Update to ${PINNED} (tested)`;
+const installedLabel = `${PINNED} (tested) installed`;
 const upstreamQuiet = { ok: true, available: false, latest_tag: null, pinned: PINNED, error: null };
 const idle = { ok: true, state: "idle", package: null, latest: null, pinned: PINNED };
 const ready = { ok: true, state: "ready", package: { tag: PINNED, path: preparedPath, archive_sha256: "a".repeat(64), runtime_verified: false },
@@ -27,6 +28,8 @@ async function test(name: string, run: () => void | Promise<void>) {
     get_pref: (key: string) => ({ key, value: manualPath }), set_pref: { ok: true },
     get_xmx_status: prefixStatus, get_xess_dll_status: dllStatus,
     get_xmx_package_status: idle, prepare_xmx_package: ready, check_xmx_package_upstream: upstreamQuiet,
+    plan_cleanup_packages: { ok: true, error: null, candidates: [], kept: [], token: null },
+    apply_cleanup_packages: { ok: true, removed: [], errors: [] },
   });
   (Router as any).MainRunningApp = undefined;
   (globalThis as any).SteamClient = { Apps: {
@@ -59,7 +62,9 @@ function input(host: Element) {
   return found!;
 }
 function noActivation() {
-  assert.equal(calls.some(name => /^(plan_|apply_|finish_|recover_)/.test(name)), false, "package work never activates a game configuration");
+  // plan_cleanup_packages/apply_cleanup_packages are housekeeping, not game
+  // configuration; the game transactions are plan_xmx/apply_xmx/finish_xmx/recover_*.
+  assert.equal(calls.some((name: string) => /^(plan_|apply_|finish_|recover_)(?!cleanup)/.test(name)), false, "package work never activates a game configuration");
 }
 
 await test("main package row mounts with a local-only status read and one Update package action", async () => {
@@ -127,7 +132,7 @@ await test("fresh disabled game selects the downloaded extracted path and still 
   } finally { await p.cleanup(); }
 });
 
-await test("explicit new download fills pristine unselected form even when cached diagnostics were valid", async () => {
+await test("a prepared pinned package offers explicit Use into a pristine form instead of a duplicate re-download", async () => {
   const cached = "/home/player/cached-package";
   fixtures.get_pref = (key: string) => ({ key, value: "" });
   fixtures.get_xmx_package_status = { ...ready, package: { ...ready.package, path: cached } };
@@ -137,8 +142,12 @@ await test("explicit new download fills pristine unselected form even when cache
   try {
     await press(p.host, "Details");
     assert.equal(input(p.host).value, "", "cached receipt alone is not a selection");
-    await press(p.host, downloadLabel);
-    assert.equal(input(p.host).value, preparedPath, "explicit fresh download can fill a pristine empty form");
+    assert.equal(button(p.host, installedLabel).getAttribute("data-disabled"), "true",
+      "the identical tested tag needs no second download folder");
+    assert.equal(button(p.host, "Use for this game").getAttribute("data-disabled"), null,
+      "selecting the existing prepared folder stays the explicit path");
+    await press(p.host, "Use for this game");
+    assert.equal(input(p.host).value, cached, "explicit Use still needs the deliberate click");
     noActivation();
   } finally { await p.cleanup(); }
 });
@@ -164,7 +173,8 @@ await test("explicit package download is safe while playing and never selects or
     assert.equal(requests.length, 1, "busy preparation cannot be duplicated");
     assert.equal(input(p.host).value, manualPath);
     await act(async () => download.resolve(ready));
-    assert.equal(button(p.host, updateLabel).getAttribute("data-disabled"), null);
+    assert.equal(button(p.host, installedLabel).getAttribute("data-disabled"), "true",
+      "a prepared pinned package must not offer a duplicate re-download");
     assert.match(p.host.textContent ?? "", /Prepared: v20261104/);
     assert.equal(button(p.host, "Use for this game").getAttribute("data-disabled"), "true");
     assert.equal(input(p.host).value, manualPath, "download completion never selects the new path");
@@ -250,7 +260,7 @@ for (const [label, response] of [
 
 for (const kind of ["refusal", "throw", "error state", "malformed"] as const) {
   await test(`package ${kind} preserves its reason, prior prepared info and manual path with explicit retry`, async () => {
-    fixtures.get_xmx_package_status = ready;
+    fixtures.get_xmx_package_status = { ...ready, package: { ...ready.package, tag: "v-older-experimental" } };
     fixtures.prepare_xmx_package = () => {
       if (kind === "throw") throw new Error("Connection timed out; preparation may continue");
       return kind === "refusal" ? { ok: false, error: "Archive checksum mismatch; old package kept" }
@@ -262,7 +272,7 @@ for (const kind of ["refusal", "throw", "error state", "malformed"] as const) {
       const staleUse = queued(p.host, "Use for this game");
       await press(p.host, "Details");
       await press(p.host, updateLabel);
-      assert.match(p.host.textContent ?? "", /Prepared: v20261104/, "a failed attempt must not erase prior prepared info");
+      assert.match(p.host.textContent ?? "", /Prepared: v-older-experimental/, "a failed attempt must not erase prior prepared info");
       assert.match(p.host.textContent ?? "", kind === "throw" ? /Connection timed out; preparation may continue/
         : kind === "refusal" ? /Archive checksum mismatch; old package kept/ : kind === "error state" ? /Release metadata unavailable; old package kept/ : /Invalid package status/);
       assert.equal(p.host.textContent?.includes("Use for this game"), false, "failure cannot authorize an older cached receipt");
@@ -325,7 +335,7 @@ for (const origin of ["mount", "prepare", "RPC timeout", "busy refusal"] as cons
         if (origin === "busy refusal") assert.match(p.host.textContent ?? "", /Another package preparation is in progress/);
         fixtures.get_xmx_package_status = ready;
         await clock.tick();
-        assert.equal(button(p.host, updateLabel).getAttribute("data-disabled"), null);
+        assert.equal(button(p.host, installedLabel).getAttribute("data-disabled"), "true");
         assert.equal(button(p.host, "Use for this game").getAttribute("data-disabled"), null);
         assert.equal(input(p.host).value, manualPath);
         assert.equal(clock.timers.size, 0, "polling stops when preparation settles");
@@ -337,7 +347,7 @@ for (const origin of ["mount", "prepare", "RPC timeout", "busy refusal"] as cons
 }
 
 await test("retained disabled Use callback from a download cannot select the previous receipt after completion", async () => {
-  fixtures.get_xmx_package_status = ready;
+  fixtures.get_xmx_package_status = { ...ready, package: { ...ready.package, tag: "v-older-experimental", path: preparedPath + "-old" } };
   const download = deferred<unknown>();
   fixtures.prepare_xmx_package = () => download.promise;
   const newer = { ...ready, package: { ...ready.package, tag: "v-next", path: preparedPath + "-new", archive_sha256: "b".repeat(64) },
@@ -391,7 +401,7 @@ for (const [label, setup] of [
 ] as const) {
   await test(`${label} blocks forced package selection but not independent preparation`, async () => {
     setup();
-    fixtures.get_xmx_package_status = ready;
+    fixtures.get_xmx_package_status = { ...ready, package: { ...ready.package, tag: "v-older-experimental" } };
     const p = await render(label === "running prop");
     try {
       assert.equal(button(p.host, "Use for this game").getAttribute("data-disabled"), "true");
@@ -410,7 +420,7 @@ for (const [label, setup] of [
 }
 for (const scope of ["prefix", "DLL"] as const) {
   await test(`${scope} operation blocks current and retained Use without deadlocking package downloads`, async () => {
-    fixtures.get_xmx_package_status = ready;
+    fixtures.get_xmx_package_status = { ...ready, package: { ...ready.package, tag: "v-older-experimental" } };
     const response = deferred<any>();
     fixtures.get_xmx_logs = () => response.promise;
     fixtures.get_xess_dll_status = { ...dllStatus, sdk: { ...dllStatus.sdk, ready: false },
@@ -466,7 +476,8 @@ for (const stage of ["local status", "download", "local poll"] as const) {
     await test(`late ${stage} response after ${destination} cannot select a folder or disturb a new preview`, async () => {
       const response = deferred<any>();
       fixtures.get_xmx_package_status = stage === "local status" ? () => response.promise
-        : stage === "local poll" ? { ...idle, state: "preparing" } : ready;
+        : stage === "local poll" ? { ...idle, state: "preparing" }
+          : { ...ready, package: { ...ready.package, tag: "v-older-experimental" } };
       fixtures.prepare_xmx_package = () => response.promise;
       fixtures.plan_xmx = (...args: unknown[]) => ({ ok: true, plan_id: "new-game-preview", old_launch_options: args[2], desired_launch_options: "new %command%", operations: [] });
       await withPackageClock(async clock => {
@@ -774,6 +785,58 @@ await test("a prepared package tag different from the pin is badged untested but
     assert.match(p.host.textContent ?? "", /version has not been validated by this plugin/);
     assert.equal(button(p.host, "Use for this game").getAttribute("data-disabled"), null, "the badge informs, it never blocks");
     noActivation();
+  } finally { await p.cleanup(); }
+});
+
+await test("a prepared pinned package installs the download row and offers no duplicate re-download", async () => {
+  fixtures.get_xmx_package_status = ready;
+  const p = await render();
+  try {
+    assert.equal(button(p.host, installedLabel).getAttribute("data-disabled"), "true");
+    assert.equal(Array.from(p.host.querySelectorAll('[data-mock="ButtonItem"]'))
+      .some(element => element.textContent === updateLabel), false, "the old Update affordance is gone");
+    assert.equal(p.host.textContent?.includes("Remove old package copies"), false, "nothing to clean up");
+    noActivation();
+  } finally { await p.cleanup(); }
+});
+
+await test("cleanup lists candidates, explains kept folders and applies with the preview token", async () => {
+  const token = "t".repeat(64);
+  const plan = { ok: true, error: null, token,
+    candidates: [
+      { path: "/home/player/xess-xmx-linux-20261113-bbbbbbbbbbbb-222222222222", tag: "20261113", size_bytes: 25 * 1048576 },
+      { path: "/home/player/xess-xmx-linux-20261111-cccccccccccc-333333333333", tag: "20261111", size_bytes: 25 * 1048576 }],
+    kept: [{ path: "/home/player/xess-xmx-linux-20261115-aaaaaaaaaaaa-111111111111", reason: "used by game 4242" }] };
+  let applied: unknown[] = [];
+  let plans = 0;
+  fixtures.plan_cleanup_packages = (...args: unknown[]) => { plans++; return plan; };
+  fixtures.apply_cleanup_packages = (...args: unknown[]) => { applied = args;
+    return { ok: true, removed: plan.candidates.map(c => c.path), errors: [] }; };
+  const p = await render();
+  try {
+    await press(p.host, "Remove old package copies (2)");
+    assert.match(p.host.textContent ?? "", /20261113/);
+    assert.match(p.host.textContent ?? "", /Keeping: xess-xmx-linux-20261115.*used by game 4242/);
+    await press(p.host, "Confirm remove (2)");
+    assert.deepEqual(applied, [token], "apply is bound to the preview token");
+    assert.equal(button(p.host, "Remove old package copies (2)") !== undefined, true); // re-offer until plan refresh empties
+  } finally { await p.cleanup(); }
+});
+
+await test("a stale cleanup preview is refused and stated, and nothing claims success", async () => {
+  const plan = { ok: true, error: null, token: "t".repeat(64),
+    candidates: [{ path: "/home/player/xess-xmx-linux-20261113-bbbbbbbbbbbb-222222222222", tag: "20261113", size_bytes: 1048576 }],
+    kept: [] };
+  fixtures.plan_cleanup_packages = () => plan;
+  fixtures.apply_cleanup_packages = () => ({ ok: false, removed: [], errors: [],
+    error: "The package folders changed since this preview; preview again." });
+  const p = await render();
+  try {
+    await press(p.host, "Remove old package copies (1)");
+    await press(p.host, "Confirm remove (1)");
+    assert.match(p.host.textContent ?? "", /changed since this preview/i);
+    const alert = p.host.querySelector('[role="alert"]');
+    assert.ok(alert && /changed since this preview/i.test(alert.textContent ?? ""), "refusal is announced, not silent");
   } finally { await p.cleanup(); }
 });
 
