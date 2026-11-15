@@ -99,6 +99,11 @@ badges — XMX, the Mesa build, and the live FSR 4 Bridge.
 Proof of the bridge at work: Pragmata has no XeSS — its FSR 4 entries run on XeSS on
 XMX with `FSR=xess`, exactly the version the game thinks it's using.
 
+![DLSS 4 inputs running on XeSS XMX in Trails in the Sky 1st Chapter](assets/DLSS4_XeSS_XMX_Trails.png)
+
+Trails in the Sky 1st Chapter: OptiScaler routes the game's **DLSS 4** upscaler inputs onto
+**XeSS on XMX**. The game thinks DLSS; the GPU does Intel matrix cores.
+
 ![Setup and preview](assets/setup-preview.png)
 ![Setup and preview](assets/setup-preview_1.png)
 ![Setup and preview](assets/setup-preview_2.png)
@@ -112,6 +117,10 @@ A game's Setup tab with the XeSS XMX panel and the FSR 4 bridge
   [xess-xmx-linux](https://github.com/HHHHanasak1/xess-xmx-linux) package — the patched Mesa
   ANV driver, the `igdext64.dll` shim, `ControlLib.dll` and the CM-kernel toolchain —
   installed, verified and **scoped to the games you pick** instead of applied system-wide.
+- **Package folders don't pile up.** Download is offered only while the tested package is not
+  prepared; once it is, the button reads *installed*. An explicit **Remove old package copies**
+  lists exactly which stale prepared folders would go, with what stays behind and why — your
+  current package and anything an enabled game still references are never candidates.
 - **Transactional everything.** Every change is previewed file-by-file (add / replace /
   restore, with hashes), applied, and finished as one step. Interrupted operations keep a
   **recovery journal** and the panel tells you exactly how to resume or abort.
