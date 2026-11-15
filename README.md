@@ -29,7 +29,9 @@ manager parked behind an explicit button for the games XeSS XMX doesn't serve.
 - An **Intel GPU with XMX** on the `xe`/`i915` kernel driver: Xe3 (validated on the ONEXPLAYER
   3, Arc B390), Xe2 (user-validated on Arc B580), Xe-HPG (user-validated on Arc A310). Meteor
   Lake has no XMX units; other Intel GPUs are unverified, not assumed working.
-- Prefer a stable Proton version rather than Proton Experimental (can cause black screens rendering)
+- **Proton Experimental works**, thanks to the pinned 20261115 package: its Proton launch hooks
+  automatically disable `VK_EXT_descriptor_heap`, the extension behind the black screen on recent
+  Experimental builds. A stable Proton (e.g. Proton 11) remains the conservative choice.
 - An internet connection for first-time setup: the plugin **downloads the upstream
   [xess-xmx-linux](https://github.com/HHHHanasak1/xess-xmx-linux) release validated against this
   plugin build** — the tag shown right on the **Download/Update package** button. The archive URL,
